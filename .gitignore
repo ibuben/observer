@@ -1,0 +1,11 @@
+/target
+
+# local settings with device credentials
+xm-settings.json
+/snapshots/
+
+# binaries and archives
+*.exe
+*.rar
+*.winmd
+Material-Icons-Library-1.jpg

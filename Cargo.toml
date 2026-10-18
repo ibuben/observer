@@ -1,0 +1,23 @@
+[package]
+name = "xm-nvr"
+version = "0.1.0"
+edition = "2021"
+description = "eXUnity Observer — клиент регистраторов Xiongmai по локальному или белому IP"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+md-5 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+eframe = "0.31"
+egui-phosphor = "0.9"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+[lib]
+name = "xm_nvr"
+path = "src/lib.rs"
+
+[build-dependencies]
+embed-resource = "3.0"
+image = { version = "0.25", default-features = false, features = ["png"] }
