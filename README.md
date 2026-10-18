@@ -1,0 +1,126 @@
+# eXUnity Observer
+
+Программа видеонаблюдения для регистраторов **Xiongmai (XM)** и **Hikvision** по локальному или белому IP: живое видео до 64 камер, архив, скачивание записей в MP4, звук, PTZ, звонок домофона.
+
+В проекте две программы:
+
+- `xm-view` — графическое приложение eXUnity Observer;
+- `xm-nvr` — консольная утилита: информация о регистраторе, поиск записей, запись живого видео и архива в файл.
+
+Работает на **Windows** и **Linux**.
+
+## Что нужно для работы
+
+- **Rust** 1.88 или новее, ставится через [rustup](https://rustup.rs). Rust из пакетов дистрибутива (`apt install rustc`) обычно слишком старый.
+- **ffmpeg** — им распаковывается видео и собираются MP4. Программа ищет `C:\ffmpeg\ffmpeg.exe` (только Windows), а если его нет — `ffmpeg` в `PATH`.
+
+## Сборка на Windows
+
+1. Установите [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) с компонентом «Разработка классических приложений на C++».
+2. Установите Rust: скачайте и запустите [rustup-init.exe](https://rustup.rs), согласитесь с настройками по умолчанию.
+3. Установите ffmpeg: скачайте сборку с [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) и положите `ffmpeg.exe` в `C:\ffmpeg\` или в любую папку из `PATH`.
+4. Соберите проект:
+
+   ```powershell
+   git clone https://github.com/ibuben/observer.git
+   cd observer
+   cargo build --release
+   ```
+
+5. Готовые файлы лежат в `target\release\`: `xm-view.exe` и `xm-nvr.exe`.
+
+## Сборка на Linux
+
+### 1. Системные пакеты
+
+Для сборки нужны компилятор C (как линковщик), `pkg-config` и заголовки ALSA для звука. Для работы — ffmpeg и обычные библиотеки графического окружения (X11 или Wayland, OpenGL), которые на десктопе обычно уже есть.
+
+**Debian / Ubuntu / Mint:**
+
+```bash
+sudo apt update
+sudo apt install -y build-essential pkg-config libasound2-dev ffmpeg git curl \
+    libxkbcommon-x11-0 libgl1 libegl1
+```
+
+**Fedora:** ffmpeg берётся из [RPM Fusion](https://rpmfusion.org/Configuration).
+
+```bash
+sudo dnf install -y gcc pkgconf-pkg-config alsa-lib-devel git curl \
+    libxkbcommon-x11 mesa-libGL mesa-libEGL
+sudo dnf install -y ffmpeg
+```
+
+**Arch / Manjaro:**
+
+```bash
+sudo pacman -S --needed base-devel pkgconf alsa-lib ffmpeg git libxkbcommon-x11 mesa
+```
+
+### 2. Rust
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+```
+
+Если Rust уже стоит, обновите его: `rustup update`.
+
+### 3. Сборка и запуск
+
+```bash
+git clone https://github.com/ibuben/observer.git
+cd observer
+cargo build --release
+./target/release/xm-view
+```
+
+Первая сборка занимает несколько минут.
+
+### Ярлык в меню приложений (по желанию)
+
+```bash
+mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons
+cp target/release/xm-view target/release/xm-nvr ~/.local/bin/
+cp Observer.png ~/.local/share/icons/observer.png
+cat > ~/.local/share/applications/observer.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Name=eXUnity Observer
+Exec=$HOME/.local/bin/xm-view
+Icon=$HOME/.local/share/icons/observer.png
+Categories=Video;AudioVideo;
+EOF
+```
+
+### Особенности Linux
+
+- **Звук** идёт через ALSA. В системах с PulseAudio или PipeWire он попадает туда через стандартный ALSA-плагин, отдельно ничего настраивать не нужно.
+- **Аппаратное ускорение** включается в настройках программы. На Linux ffmpeg сам выбирает VA-API (Intel/AMD), VDPAU или CUDA (NVIDIA). Если ускорение недоступно, например в виртуальной машине, видео распаковывается процессором.
+- В виртуальной машине без 3D-ускорения окно рисуется программным OpenGL (Mesa llvmpipe). Это работает, но при большом числе камер будет медленнее.
+
+## Где программа хранит данные
+
+| Что | Где |
+| --- | --- |
+| Настройки и список регистраторов (`xm-settings.json`) | рядом с исполняемым файлом |
+| Снимки кадров (`snapshots/`) | рядом с исполняемым файлом |
+| Скачанные записи | `~/Downloads/Observer` (Windows: `%USERPROFILE%\Downloads\Observer`) |
+
+Поэтому папка с `xm-view` должна быть доступна на запись. В `xm-settings.json` пароли от регистраторов хранятся открытым текстом — не выкладывайте этот файл в общий доступ.
+
+## Консольная утилита `xm-nvr`
+
+```bash
+# Информация о регистраторе
+xm-nvr info --host 192.168.1.10
+
+# Записи канала 1 за сутки
+xm-nvr search --host 192.168.1.10 --channel 1 \
+    --start "2026-10-06 00:00:00" --end "2026-10-06 23:59:59"
+
+# 30 секунд живого видео с канала 2 в файл
+xm-nvr live --host 192.168.1.10 --channel 2 --stream main --seconds 30 --out cam2.h264
+```
+
+Порт по умолчанию — `34567`, пользователь — `admin`. Пароль передаётся через `--password` или переменную окружения `XM_PASSWORD`. Полный список параметров: `xm-nvr --help`.

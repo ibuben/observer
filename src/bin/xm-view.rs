@@ -2046,7 +2046,7 @@ impl Viewer {
 
     fn reveal_downloads(&mut self) {
         let dir = download_dir();
-        match Command::new("explorer").arg(dir.as_os_str()).spawn() {
+        match open_external(dir.as_os_str()) {
             Ok(child) => drop(child),
             Err(err) => self.set_status(format!("Не удалось открыть папку: {err}")),
         }
@@ -2250,9 +2250,7 @@ impl eframe::App for Viewer {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
                         if response.clicked() {
-                            let _ = Command::new("cmd")
-                                .args(["/C", "start", "", "https://exunity.uz/?ref=xvms"])
-                                .spawn();
+                            let _ = open_external("https://exunity.uz/?ref=xvms".as_ref());
                         }
                         ui.painter().image(
                             logo.id(),
@@ -4638,9 +4636,11 @@ impl Viewer {
             });
             settings_section(ui, with_icon(ph::CPU, "Декодирование"), |ui| {
                 ui.label(
-                    egui::RichText::new(
-                        "Видеокарта распаковывает H.264 и H.265 через D3D11. Кадр всё равно копируется в окно. Если поток не пойдёт, эта камера сама вернётся на процессор. MPEG-4 всегда на процессоре.",
-                    )
+                    egui::RichText::new(if cfg!(windows) {
+                        "Видеокарта распаковывает H.264 и H.265 через D3D11. Кадр всё равно копируется в окно. Если поток не пойдёт, эта камера сама вернётся на процессор. MPEG-4 всегда на процессоре."
+                    } else {
+                        "Видеокарта распаковывает H.264 и H.265 через VA-API, VDPAU или CUDA — что найдёт ffmpeg. Кадр всё равно копируется в окно. Если поток не пойдёт, эта камера сама вернётся на процессор. MPEG-4 всегда на процессоре."
+                    })
                     .color(MUTED),
                 );
                 ui.add_space(10.0);
@@ -7080,25 +7080,7 @@ fn home_groups() -> &'static [(&'static str, &'static [(&'static str, Page)])] {
 }
 
 fn today_day() -> String {
-    #[repr(C)]
-    struct SystemTime {
-        year: u16,
-        month: u16,
-        day_of_week: u16,
-        day: u16,
-        hour: u16,
-        minute: u16,
-        second: u16,
-        milliseconds: u16,
-    }
-    extern "system" {
-        fn GetLocalTime(time: *mut SystemTime);
-    }
-    unsafe {
-        let mut time = std::mem::zeroed();
-        GetLocalTime(&mut time);
-        format!("{:04}-{:02}-{:02}", time.year, time.month, time.day)
-    }
+    chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
 fn format_day(day: &str) -> String {
@@ -7661,7 +7643,8 @@ fn normalize_speed(speed: u8) -> u8 {
 }
 
 fn download_dir() -> PathBuf {
-    let dir = std::env::var_os("USERPROFILE")
+    let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let dir = std::env::var_os(home)
         .map(PathBuf::from)
         .map(|home| home.join("Downloads").join("Observer"))
         .or_else(|| {
@@ -7672,6 +7655,20 @@ fn download_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("downloads"));
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+fn open_external(target: &std::ffi::OsStr) -> std::io::Result<Child> {
+    if cfg!(windows) {
+        if Path::new(target).is_dir() {
+            Command::new("explorer").arg(target).spawn()
+        } else {
+            Command::new("cmd").args(["/C", "start", ""]).arg(target).spawn()
+        }
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(target).spawn()
+    } else {
+        Command::new("xdg-open").arg(target).spawn()
+    }
 }
 
 fn download_stem(recording: &Recording) -> String {
@@ -9285,7 +9282,7 @@ impl Decoder {
         if hw {
             args.extend([
                 "-hwaccel",
-                "d3d11va",
+                if cfg!(windows) { "d3d11va" } else { "auto" },
                 "-hwaccel_flags",
                 "allow_profile_mismatch",
             ]);
@@ -9756,6 +9753,107 @@ fn ulaw_decode(value: u8) -> i16 {
     sample as i16
 }
 
+#[cfg(not(windows))]
+fn play_audio(rx: mpsc::Receiver<PcmChunk>, status: Arc<Mutex<String>>) {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+    let queue = Arc::new(Mutex::new(std::collections::VecDeque::<f32>::new()));
+    let opened = cpal::default_host()
+        .default_output_device()
+        .ok_or_else(|| "устройство вывода не найдено".to_string())
+        .and_then(|device| {
+            let config = device
+                .default_output_config()
+                .map_err(|err| format!("устройство вывода не открылось ({err})"))?;
+            let format = config.sample_format();
+            let config: cpal::StreamConfig = config.into();
+            let rate = config.sample_rate;
+            let stream = match format {
+                cpal::SampleFormat::F32 => {
+                    open_output::<f32>(&device, &config, queue.clone(), status.clone())
+                }
+                cpal::SampleFormat::I16 => {
+                    open_output::<i16>(&device, &config, queue.clone(), status.clone())
+                }
+                cpal::SampleFormat::U16 => {
+                    open_output::<u16>(&device, &config, queue.clone(), status.clone())
+                }
+                cpal::SampleFormat::I32 => {
+                    open_output::<i32>(&device, &config, queue.clone(), status.clone())
+                }
+                other => Err(format!("формат вывода {other} не поддерживается")),
+            }?;
+            stream
+                .play()
+                .map_err(|err| format!("устройство вывода не запустилось ({err})"))?;
+            Ok((stream, rate))
+        });
+    let (_stream, out_rate) = match opened {
+        Ok(opened) => opened,
+        Err(err) => {
+            *status.lock().unwrap() = format!("Звук: {err}");
+            return;
+        }
+    };
+    let limit = out_rate as usize * 2 / 5;
+    let mut phase = 0.0f64;
+    while let Ok(chunk) = rx.recv() {
+        if chunk.samples.is_empty() || chunk.rate == 0 {
+            continue;
+        }
+        let step = chunk.rate as f64 / out_rate as f64;
+        let last = chunk.samples.len() - 1;
+        let mut queue = queue.lock().unwrap();
+        while phase < chunk.samples.len() as f64 {
+            let index = phase as usize;
+            let frac = (phase - index as f64) as f32;
+            let a = chunk.samples[index] as f32 / 32768.0;
+            let b = chunk.samples[(index + 1).min(last)] as f32 / 32768.0;
+            queue.push_back(a + (b - a) * frac);
+            phase += step;
+        }
+        phase -= chunk.samples.len() as f64;
+        if queue.len() > limit {
+            let extra = queue.len() - limit;
+            queue.drain(..extra);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn open_output<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    queue: Arc<Mutex<std::collections::VecDeque<f32>>>,
+    status: Arc<Mutex<String>>,
+) -> Result<cpal::Stream, String>
+where
+    T: cpal::SizedSample + cpal::FromSample<f32>,
+{
+    use cpal::traits::DeviceTrait;
+
+    let channels = config.channels.max(1) as usize;
+    device
+        .build_output_stream(
+            config.clone(),
+            move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                let mut queue = queue.lock().unwrap();
+                for frame in data.chunks_mut(channels) {
+                    let value = T::from_sample(queue.pop_front().unwrap_or(0.0));
+                    frame.fill(value);
+                }
+            },
+            move |err: cpal::Error| {
+                if !matches!(err.kind(), cpal::ErrorKind::Xrun) {
+                    *status.lock().unwrap() = format!("Звук: {err}");
+                }
+            },
+            None,
+        )
+        .map_err(|err| format!("устройство вывода не открылось ({err})"))
+}
+
+#[cfg(windows)]
 fn play_audio(rx: mpsc::Receiver<PcmChunk>, status: Arc<Mutex<String>>) {
     let mut device: Option<WaveOut> = None;
     let mut failed = false;
@@ -9785,18 +9883,21 @@ fn play_audio(rx: mpsc::Receiver<PcmChunk>, status: Arc<Mutex<String>>) {
     }
 }
 
+#[cfg(windows)]
 struct WaveOut {
     handle: *mut std::ffi::c_void,
     rate: u32,
     slots: [WaveSlot; 4],
 }
 
+#[cfg(windows)]
 struct WaveSlot {
     bytes: Vec<u8>,
     header: WaveHdr,
     prepared: bool,
 }
 
+#[cfg(windows)]
 #[repr(C)]
 struct WaveFormatEx {
     format_tag: u16,
@@ -9808,6 +9909,7 @@ struct WaveFormatEx {
     size: u16,
 }
 
+#[cfg(windows)]
 #[repr(C)]
 struct WaveHdr {
     data: *mut u8,
@@ -9820,6 +9922,7 @@ struct WaveHdr {
     reserved: usize,
 }
 
+#[cfg(windows)]
 #[link(name = "winmm")]
 extern "system" {
     fn waveOutOpen(
@@ -9845,6 +9948,7 @@ extern "system" {
     fn waveOutClose(handle: *mut std::ffi::c_void) -> u32;
 }
 
+#[cfg(windows)]
 impl WaveOut {
     fn open(rate: u32) -> Result<Self, String> {
         let format = WaveFormatEx {

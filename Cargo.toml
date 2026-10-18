@@ -2,6 +2,7 @@
 name = "xm-nvr"
 version = "0.1.0"
 edition = "2021"
+autobins = false
 description = "eXUnity Observer — клиент регистраторов Xiongmai по локальному или белому IP"
 
 [dependencies]
@@ -13,11 +14,23 @@ thiserror = "2"
 eframe = "0.31"
 egui-phosphor = "0.9"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 [lib]
 name = "xm_nvr"
 path = "src/lib.rs"
 
+[[bin]]
+name = "xm-view"
+path = "src/bin/xm-view.rs"
+
+[[bin]]
+name = "xm-nvr"
+path = "src/bin/xm-nvr.rs"
+
 [build-dependencies]
 embed-resource = "3.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target."cfg(not(windows))".dependencies]
+cpal = "0.18.2"
