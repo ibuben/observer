@@ -9293,7 +9293,7 @@ impl Decoder {
             "-i",
             "pipe:0",
             "-an",
-            "-fps_mode",
+            if ffmpeg_has_fps_mode() { "-fps_mode" } else { "-vsync" },
             "passthrough",
             "-pix_fmt",
             "rgba",
@@ -9466,6 +9466,44 @@ fn ffmpeg_path() -> String {
     } else {
         "ffmpeg".to_string()
     }
+}
+
+/// `-fps_mode` appeared in ffmpeg 5.1; older builds (Ubuntu 20.04 ships 4.2) only know `-vsync`.
+fn ffmpeg_has_fps_mode() -> bool {
+    static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HAS.get_or_init(|| {
+        let mut command = Command::new(ffmpeg_path());
+        command
+            .arg("-version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
+        let Ok(output) = command.output() else {
+            return true;
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        let Some(version) = text
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(2))
+        else {
+            return true;
+        };
+        let mut parts = version
+            .trim_start_matches(['n', 'N'])
+            .split(|ch: char| !ch.is_ascii_digit());
+        let major = parts.next().and_then(|part| part.parse::<u32>().ok());
+        let minor = parts.next().and_then(|part| part.parse::<u32>().ok()).unwrap_or(0);
+        match major {
+            Some(major) => (major, minor) >= (5, 1),
+            None => true,
+        }
+    })
 }
 
 enum PtzHit {

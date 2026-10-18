@@ -12,7 +12,7 @@
 ## Что нужно для работы
 
 - **Rust** 1.88 или новее, ставится через [rustup](https://rustup.rs). Rust из пакетов дистрибутива (`apt install rustc`) обычно слишком старый.
-- **ffmpeg** — им распаковывается видео и собираются MP4. Программа ищет `C:\ffmpeg\ffmpeg.exe` (только Windows), а если его нет — `ffmpeg` в `PATH`.
+- **ffmpeg** 4.2 или новее — им распаковывается видео и собираются MP4. Программа ищет `C:\ffmpeg\ffmpeg.exe` (только Windows), а если его нет — `ffmpeg` в `PATH`.
 
 ## Сборка на Windows
 
@@ -55,6 +55,15 @@ sudo dnf install -y ffmpeg
 
 ```bash
 sudo pacman -S --needed base-devel pkgconf alsa-lib ffmpeg git libxkbcommon-x11 mesa
+```
+
+Если `apt` пишет `Unable to locate package libasound2-dev`, значит, в системе не подключён основной репозиторий Ubuntu (бывает после обновления версии или установки с диска). Проверьте: `grep -rh '^deb ' /etc/apt/sources.list /etc/apt/sources.list.d/` — среди строк должна быть `deb http://...ubuntu... <версия> main`. Для Ubuntu 20.04 его можно добавить так, затем повторить `apt update` и установку:
+
+```bash
+sudo tee /etc/apt/sources.list.d/ubuntu-main.list >/dev/null <<'EOF'
+deb http://archive.ubuntu.com/ubuntu focal main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu focal-updates main restricted universe multiverse
+EOF
 ```
 
 ### 2. Rust
