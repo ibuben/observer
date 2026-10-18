@@ -9,6 +9,15 @@
 
 Работает на **Windows** и **Linux**.
 
+## Готовые сборки
+
+Скачайте архив для своей системы на странице [Releases](https://github.com/ibuben/observer/releases/latest):
+
+- `observer-vX.Y.Z-windows-x64.zip` — Windows 10/11, 64 бит;
+- `observer-vX.Y.Z-linux-x64.tar.gz` — Linux x86-64 с glibc 2.31 или новее (Ubuntu 20.04+, Debian 11+, Fedora 32+ и т. п.).
+
+Распакуйте архив в папку, доступную на запись, и запустите `xm-view` (`xm-view.exe`). Отдельно нужен только **ffmpeg** (см. ниже). На Linux он ставится из пакетов, например `sudo apt install ffmpeg`.
+
 ## Что нужно для работы
 
 - **Rust** 1.88 или новее, ставится через [rustup](https://rustup.rs). Rust из пакетов дистрибутива (`apt install rustc`) обычно слишком старый.

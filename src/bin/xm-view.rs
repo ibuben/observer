@@ -2312,7 +2312,11 @@ impl eframe::App for Viewer {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.add_space(12.0);
                     ui.label(
-                        egui::RichText::new("Observer v0.9.1 [By eXUnity LAB]")
+                        egui::RichText::new(concat!(
+                            "Observer v",
+                            env!("CARGO_PKG_VERSION"),
+                            " [By eXUnity LAB]"
+                        ))
                         .color(MUTED),
                     );
                     ui.add_space(8.0);

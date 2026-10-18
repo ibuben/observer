@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          rustup update stable
+          rustup default stable
+          cargo build --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "observer-${{ github.ref_name }}-windows-x64"
+          New-Item -ItemType Directory $name | Out-Null
+          Copy-Item target/release/xm-view.exe, target/release/xm-nvr.exe, README.md $name
+          Compress-Archive -Path "$name/*" -DestinationPath "$name.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: observer-*-windows-x64.zip
+
+  linux:
+    runs-on: ubuntu-latest
+    # Oldest supported glibc: binaries built here run on Ubuntu 20.04+ / Debian 11+.
+    container: ubuntu:20.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: System packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config libasound2-dev curl ca-certificates git
+
+      - uses: actions/checkout@v4
+
+      - name: Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        run: |
+          name="observer-${{ github.ref_name }}-linux-x64"
+          mkdir "$name"
+          cp target/release/xm-view target/release/xm-nvr README.md Observer.png "$name/"
+          tar czf "$name.tar.gz" "$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: observer-*-linux-x64.tar.gz
+
+  release:
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "Observer $TAG" --generate-notes
+          gh release upload "$TAG" observer-*.zip observer-*.tar.gz --clobber
