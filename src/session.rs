@@ -207,7 +207,7 @@ impl Session {
         let mut found = Vec::new();
         let mut position = 0i64;
         for _ in 0..40 {
-            let reply = self.request(
+            let reply = match self.request(
                 LOG_QUERY,
                 "OPLogQuery",
                 json!({
@@ -216,7 +216,11 @@ impl Session {
                     "Type": "LogAll",
                     "LogPosition": position
                 }),
-            )?;
+            ) {
+                Ok(reply) => reply,
+                Err(err) if is_no_data(&err) => break,
+                Err(err) => return Err(err),
+            };
             let Some(list) = reply.get("OPLogQuery").and_then(Value::as_array) else {
                 break;
             };
@@ -622,7 +626,7 @@ impl Session {
         begin: &str,
         end: &str,
     ) -> Result<Vec<Recording>, Error> {
-        let reply = self.request(
+        let reply = match self.request(
             FILE_QUERY,
             "OPFileQuery",
             json!({
@@ -634,7 +638,11 @@ impl Session {
                 "StreamType": "0x00000000",
                 "Type": "h264"
             }),
-        )?;
+        ) {
+            Ok(reply) => reply,
+            Err(err) if is_no_data(&err) => return Ok(Vec::new()),
+            Err(err) => return Err(err),
+        };
         let Some(list) = reply.get("OPFileQuery").and_then(Value::as_array) else {
             return Ok(Vec::new());
         };
@@ -813,6 +821,11 @@ fn parse_session(text: &str) -> Result<u32, Error> {
     u32::from_str_radix(hex, 16).map_err(|_| Error::Protocol(format!("SessionID {text}")))
 }
 
+/// XM firmware answers a file or log query with nothing to return as Ret 119, not an empty list.
+fn is_no_data(err: &Error) -> bool {
+    matches!(err, Error::Device { code: 119, .. })
+}
+
 fn json_string(value: Option<&Value>) -> String {
     match value {
         Some(Value::String(text)) => text.clone(),
@@ -985,6 +998,49 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "/idea0/a.h264");
         assert_eq!(files[0].bytes, 1000);
+    }
+
+    #[test]
+    fn search_treats_ret_119_as_no_records() {
+        let addr = serve(|mut stream| {
+            let _ = read_json(&mut stream);
+            write_json(
+                &mut stream,
+                5,
+                1001,
+                json!({"Ret": 100, "SessionID": "0x00000005", "AliveInterval": 20}),
+            );
+            let (msg, _) = read_json(&mut stream);
+            assert_eq!(msg, FILE_QUERY);
+            write_json(&mut stream, 5, 1441, json!({"Ret": 119, "SessionID": "0x00000005"}));
+
+            let (msg, _) = read_json(&mut stream);
+            assert_eq!(msg, FILE_QUERY);
+            let page: Vec<Value> = (0..64)
+                .map(|index| {
+                    json!({
+                        "FileName": format!("/idea0/{index}.h264"),
+                        "BeginTime": format!("2026-10-06 {:02}:{:02}:00", index / 60, index % 60),
+                        "EndTime": format!("2026-10-06 {:02}:{:02}:59", index / 60, index % 60),
+                        "FileLength": "1000"
+                    })
+                })
+                .collect();
+            write_json(&mut stream, 5, 1441, json!({"Ret": 100, "OPFileQuery": page}));
+            let (msg, _) = read_json(&mut stream);
+            assert_eq!(msg, FILE_QUERY);
+            write_json(&mut stream, 5, 1441, json!({"Ret": 119, "SessionID": "0x00000005"}));
+        });
+        let (host, port) = addr.rsplit_once(':').unwrap();
+        let mut session = Session::connect(host, port.parse().unwrap(), "admin", "").unwrap();
+        let empty = session
+            .search(0, "2026-10-01 00:00:00", "2026-10-01 23:59:59")
+            .unwrap();
+        assert!(empty.is_empty());
+        let paged = session
+            .search(0, "2026-10-06 00:00:00", "2026-10-06 23:59:59")
+            .unwrap();
+        assert_eq!(paged.len(), 64);
     }
 
     #[test]

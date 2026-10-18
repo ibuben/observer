@@ -560,6 +560,8 @@ struct LiveDevice {
     channels: u16,
     titles: Vec<String>,
     links: Vec<String>,
+    /// ISAPI channel number behind each channel index, for Hikvision only.
+    hik_ids: Vec<u16>,
     connected: bool,
     error: String,
 }
@@ -582,6 +584,7 @@ impl LiveDevice {
             channels: 0,
             titles: Vec::new(),
             links: Vec::new(),
+            hik_ids: Vec::new(),
             connected: false,
             error: String::new(),
         })
@@ -1118,6 +1121,18 @@ impl Viewer {
         ))
     }
 
+    /// Recording track of a Hikvision channel: `{ISAPI channel}01`, the main stream.
+    fn hik_track(&self, device_id: u64, channel: u16) -> u32 {
+        let devices = self.devices.lock().unwrap();
+        let id = devices
+            .iter()
+            .find(|item| item.id == device_id)
+            .or_else(|| devices.first())
+            .and_then(|device| device.hik_ids.get(usize::from(channel)).copied())
+            .unwrap_or(channel + 1);
+        u32::from(id) * 100 + 1
+    }
+
     fn set_status(&self, text: impl Into<String>) {
         *self.status.lock().unwrap() = text.into();
     }
@@ -1446,8 +1461,20 @@ impl Viewer {
         let hwaccel = self.hwaccel;
         let channel = source.channel;
         if kind == Vendor::Hikvision {
+            let hik_channel = self
+                .devices
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|device| device.id == source.device_id)
+                .and_then(|device| device.hik_ids.get(usize::from(channel)).copied())
+                .unwrap_or(channel + 1);
+            let source = HikSource::Live {
+                channel: hik_channel,
+                main: stream == StreamKind::Main,
+            };
             thread::spawn(move || {
-                run_hik_live(slot, generation, status, host, user, password, channel, stream, hwaccel);
+                run_hik(slot, generation, status, host, user, password, source, hwaccel);
             });
             return;
         }
@@ -1509,6 +1536,7 @@ impl Viewer {
             channels: 0,
             titles: Vec::new(),
             links: Vec::new(),
+            hik_ids: Vec::new(),
             connected: false,
             error: String::new(),
         });
@@ -1562,6 +1590,7 @@ impl Viewer {
             device.channels = 0;
             device.titles.clear();
             device.links.clear();
+            device.hik_ids.clear();
             device.connected = false;
             device.error.clear();
             true
@@ -1696,20 +1725,47 @@ impl Viewer {
         self.seek_preview = None;
         self.download_draft = None;
         self.recordings.lock().unwrap().clear();
-        if kind == Vendor::Hikvision {
-            self.set_status("Архив Hikvision пока не подключён");
-            return;
-        }
         let channel = self.archive_channel;
         self.set_status("Поиск записей…");
         let status = Arc::clone(&self.status);
         let recordings = Arc::clone(&self.recordings);
+        if kind == Vendor::Hikvision {
+            let track = self.hik_track(self.archive_device, channel);
+            thread::spawn(move || {
+                match xm_nvr::hik_search(&host, port, &user, &password, track, &begin, &end) {
+                    Ok(found) => {
+                        let count = found.len();
+                        *recordings.lock().unwrap() = found
+                            .into_iter()
+                            .map(|record| Recording {
+                                channel,
+                                begin: record.begin,
+                                end: record.end,
+                                path: record.uri,
+                                bytes: record.bytes,
+                            })
+                            .collect();
+                        *status.lock().unwrap() = if count == 0 {
+                            "За этот период записей нет".to_string()
+                        } else {
+                            format!("Записей: {count}")
+                        };
+                    }
+                    Err(err) => *status.lock().unwrap() = err.to_string(),
+                }
+            });
+            return;
+        }
         thread::spawn(move || match Session::connect(&host, port, &user, &password) {
             Ok(mut session) => match session.search(channel, &begin, &end) {
                 Ok(files) => {
                     let count = files.len();
                     *recordings.lock().unwrap() = files;
-                    *status.lock().unwrap() = format!("Записей: {count}");
+                    *status.lock().unwrap() = if count == 0 {
+                        "За этот период записей нет".to_string()
+                    } else {
+                        format!("Записей: {count}")
+                    };
                 }
                 Err(err) => *status.lock().unwrap() = err.to_string(),
             },
@@ -1798,7 +1854,11 @@ impl Viewer {
             all.sort_by(|left, right| right.time.cmp(&left.time));
             let count = all.len();
             *rows.lock().unwrap() = all;
-            let mut text = format!("Событий: {count}");
+            let mut text = if count == 0 {
+                "За этот период событий нет".to_string()
+            } else {
+                format!("Событий: {count}")
+            };
             if let Some(err) = failed.first() {
                 text = format!("{text} · {err}");
             }
@@ -1818,10 +1878,6 @@ impl Viewer {
                 return;
             }
         };
-        if kind == Vendor::Hikvision {
-            self.set_status("Архив Hikvision пока не подключён");
-            return;
-        }
         let generation = self.archive.begin();
         self.archive_seen = 0;
         self.archive_texture = None;
@@ -1833,6 +1889,25 @@ impl Viewer {
         self.seek_preview = None;
         let label = format!("Архив {} – {}", recording.begin, recording.end);
         self.set_status(format!("{label}: ожидание кадра…"));
+        if kind == Vendor::Hikvision {
+            let (Some(begin), Some(end)) = (stamp_epoch(&recording.begin), stamp_epoch(&recording.end)) else {
+                self.set_status("У записи нет времени начала или конца");
+                return;
+            };
+            let source = HikSource::Archive {
+                track: self.hik_track(self.archive_device, recording.channel),
+                begin,
+                end: end.max(begin + 1),
+                label,
+            };
+            let slot = Arc::clone(&self.archive);
+            let status = Arc::clone(&self.status);
+            let hwaccel = self.hwaccel;
+            thread::spawn(move || {
+                run_hik(slot, generation, status, host, user, password, source, hwaccel);
+            });
+            return;
+        }
         let spec = PlaybackSpec {
             channel: recording.channel,
             begin: recording.begin.clone(),
@@ -1877,11 +1952,6 @@ impl Viewer {
                     return;
                 }
             };
-        if kind == Vendor::Hikvision {
-            self.download_busy.store(false, Ordering::Release);
-            self.set_status("Архив Hikvision пока не подключён");
-            return;
-        }
         let pack = self.download_mp4;
         let dir = download_dir();
         let stem = download_stem(&recording);
@@ -1905,6 +1975,76 @@ impl Viewer {
         let got = Arc::clone(&self.download_got);
         let at = Arc::clone(&self.download_at);
         let cancel = Arc::clone(&self.download_cancel);
+        if kind == Vendor::Hikvision {
+            let uri = if recording.path.is_empty() {
+                let track = self.hik_track(self.archive_device, recording.channel);
+                xm_nvr::hik_playback_uri(&host, track, &recording.begin, &recording.end)
+            } else {
+                recording.path.clone()
+            };
+            let ps_path = dir.join(format!("{stem}.ps"));
+            let part = dir.join(format!("{stem}.ps.part"));
+            self.set_status(format!(
+                "Скачиваю {}…",
+                if pack { mp4_path.display() } else { ps_path.display() }
+            ));
+            thread::spawn(move || {
+                let result = File::create(&part)
+                    .map_err(|err| err.to_string())
+                    .and_then(|mut file| {
+                        xm_nvr::hik_download(&host, port, &user, &password, &uri, &mut file, |bytes| {
+                            got.store(bytes, Ordering::Relaxed);
+                            !cancel.load(Ordering::Acquire)
+                        })
+                        .map_err(|err| err.to_string())
+                    });
+                let cancelled = cancel.load(Ordering::Acquire);
+                *status.lock().unwrap() = match result {
+                    Err(_) if cancelled => {
+                        let _ = std::fs::remove_file(&part);
+                        "Скачивание отменено".into()
+                    }
+                    Err(err) => {
+                        let _ = std::fs::remove_file(&part);
+                        format!("Не удалось скачать: {err}")
+                    }
+                    Ok(bytes) if pack => {
+                        *status.lock().unwrap() = "Собираю MP4…".into();
+                        match pack_ps_mp4(&part, &mp4_path, &cancel) {
+                            Ok(()) => {
+                                let _ = std::fs::remove_file(&part);
+                                let size = std::fs::metadata(&mp4_path).map(|item| item.len()).unwrap_or(bytes);
+                                format!(
+                                    "Сохранено {} · {} · картинка без перекодирования",
+                                    mp4_path.display(),
+                                    format_bytes(size)
+                                )
+                            }
+                            Err(_) if cancel.load(Ordering::Acquire) => {
+                                let _ = std::fs::remove_file(&part);
+                                let _ = std::fs::remove_file(&mp4_path);
+                                "Скачивание отменено".into()
+                            }
+                            Err(err) => {
+                                let _ = std::fs::remove_file(&mp4_path);
+                                let _ = std::fs::rename(&part, &ps_path);
+                                format!("Не удалось собрать MP4: {err}. Оставлен файл {}", ps_path.display())
+                            }
+                        }
+                    }
+                    Ok(bytes) => {
+                        let _ = std::fs::rename(&part, &ps_path);
+                        format!(
+                            "Сохранено {} · {} · файл регистратора (MPEG-PS)",
+                            ps_path.display(),
+                            format_bytes(bytes)
+                        )
+                    }
+                };
+                busy.store(false, Ordering::Release);
+            });
+            return;
+        }
         let spec = PlaybackSpec {
             channel: recording.channel,
             begin: recording.begin,
@@ -2057,16 +2197,9 @@ impl Viewer {
             self.set_status("Уже скачивается другой файл");
             return;
         }
-        match self.device_credentials(self.archive_device) {
-            Ok((Vendor::Hikvision, _, _, _, _)) => {
-                self.set_status("Архив Hikvision пока не подключён");
-                return;
-            }
-            Err(err) => {
-                self.set_status(err);
-                return;
-            }
-            Ok(_) => {}
+        if let Err(err) = self.device_credentials(self.archive_device) {
+            self.set_status(err);
+            return;
         }
         self.archive_picker = false;
         self.download_draft = Some(DownloadDraft {
@@ -5682,22 +5815,19 @@ impl Viewer {
     }
 
     fn write_active(&mut self, epoch: i64) {
-        let other = stamp_epoch(if self.picker_editing_from {
-            &self.picker_to
-        } else {
-            &self.picker_from
-        });
-        let Some(other) = other else {
+        let (Some(start), Some(end)) = (stamp_epoch(&self.picker_from), stamp_epoch(&self.picker_to))
+        else {
             return;
         };
-        let stamp = epoch_stamp(snap_endpoint(epoch, other, self.picker_editing_from));
-        if self.picker_editing_from {
-            self.picker_from = stamp;
-            self.reveal_stamp(&self.picker_from.clone());
+        let (start, end) = fit_range(epoch, start, end, self.picker_editing_from);
+        self.picker_from = epoch_stamp(start);
+        self.picker_to = epoch_stamp(end);
+        let active = if self.picker_editing_from {
+            self.picker_from.clone()
         } else {
-            self.picker_to = stamp;
-            self.reveal_stamp(&self.picker_to.clone());
-        }
+            self.picker_to.clone()
+        };
+        self.reveal_stamp(&active);
         self.sync_time_fields();
     }
 
@@ -5807,8 +5937,6 @@ impl Viewer {
         let Some(end_epoch) = stamp_epoch(&self.picker_to) else {
             return None;
         };
-        let start_day = start_epoch.div_euclid(86400);
-        let end_day = end_epoch.div_euclid(86400);
         let pointer = ui.input(|input| input.pointer.hover_pos());
         let mut hover_day = None;
         for week in 0..weeks {
@@ -5822,7 +5950,7 @@ impl Viewer {
                 }
             }
         }
-        let mut band_end = end_day;
+        let (mut band_start, mut band_stop) = (start_epoch, end_epoch);
         if !self.picker_editing_from {
             if let Some(day) = hover_day {
                 let (_, _, _, hour, minute, second) =
@@ -5831,14 +5959,11 @@ impl Viewer {
                     + i64::from(hour) * 3600
                     + i64::from(minute) * 60
                     + i64::from(second);
-                band_end = snap_endpoint(hovered, start_epoch, false).div_euclid(86400);
+                (band_start, band_stop) = fit_range(hovered, start_epoch, end_epoch, false);
             }
         }
-        let (band_from, band_to) = if start_day <= band_end {
-            (start_day, band_end)
-        } else {
-            (band_end, start_day)
-        };
+        let band_from = band_start.div_euclid(86400);
+        let band_to = band_stop.div_euclid(86400);
         let accent = ui_accent(ui);
         let band = tint(TILE, accent, 42);
         let ink = accent_ink(accent);
@@ -5873,7 +5998,7 @@ impl Viewer {
                     let bar = egui::Rect::from_center_size(cell.center(), egui::vec2(cell.width(), 32.0));
                     ui.painter().rect_filled(bar, radius, band);
                 }
-                let endpoint = index == start_day || index == band_end;
+                let endpoint = index == band_from || index == band_to;
                 let mark = egui::Rect::from_center_size(cell.center(), egui::vec2(32.0, 32.0));
                 if endpoint {
                     ui.painter().rect_filled(mark, 16.0, accent);
@@ -7753,9 +7878,44 @@ fn pack_mp4(
         "+faststart".into(),
         output.display().to_string(),
     ]);
+    run_ffmpeg(&args, cancel)
+}
+
+/// Hikvision recordings come as MPEG-PS; the picture is copied, G.711/AAC sound becomes AAC.
+fn pack_ps_mp4(source: &Path, output: &Path, cancel: &AtomicBool) -> Result<(), String> {
+    let args: Vec<String> = [
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-fflags",
+        "+genpts",
+        "-i",
+        &source.display().to_string(),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "64k",
+        "-movflags",
+        "+faststart",
+        &output.display().to_string(),
+    ]
+    .iter()
+    .map(|item| item.to_string())
+    .collect();
+    run_ffmpeg(&args, cancel)
+}
+
+fn run_ffmpeg(args: &[String], cancel: &AtomicBool) -> Result<(), String> {
     let mut command = Command::new(ffmpeg_path());
     command
-        .args(&args)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -7801,12 +7961,20 @@ fn pack_mp4(
     }
 }
 
-fn snap_endpoint(edited: i64, other: i64, editing_from: bool) -> i64 {
+fn fit_range(edited: i64, start: i64, end: i64, editing_from: bool) -> (i64, i64) {
     const MIN_GAP: i64 = 60;
+    let allowed = MIN_GAP..=MAX_RANGE_SECS;
+    let span = (end - start).clamp(MIN_GAP, MAX_RANGE_SECS);
     if editing_from {
-        edited.clamp(other - MAX_RANGE_SECS, other - MIN_GAP)
+        if allowed.contains(&(end - edited)) {
+            (edited, end)
+        } else {
+            (edited, edited + span)
+        }
+    } else if allowed.contains(&(edited - start)) {
+        (start, edited)
     } else {
-        edited.clamp(other + MIN_GAP, other + MAX_RANGE_SECS)
+        (edited - span, edited)
     }
 }
 
@@ -8808,6 +8976,7 @@ fn probe_hikvision(
         }
     };
     let channels = info.channels.len() as u16;
+    let offline = info.channels.iter().filter(|channel| !channel.online).count();
     let door = info.door;
     let mut list = devices.lock().unwrap();
     let Some(device) = list.iter_mut().find(|device| device.id == id) else {
@@ -8817,8 +8986,13 @@ fn probe_hikvision(
     device.software = info.firmware;
     device.hardware = info.model;
     device.channels = channels;
-    device.titles = info.channels;
-    device.links = vec!["Connected".to_string(); channels as usize];
+    device.hik_ids = info.channels.iter().map(|channel| channel.id).collect();
+    device.links = info
+        .channels
+        .iter()
+        .map(|channel| if channel.online { "Connected" } else { "Disconnected" }.to_string())
+        .collect();
+    device.titles = info.channels.into_iter().map(|channel| channel.name).collect();
     device.door = door;
     device.connected = true;
     device.error.clear();
@@ -8828,41 +9002,71 @@ fn probe_hikvision(
     drop(list);
     *status.lock().unwrap() = if door {
         format!("{name}: домофон, {channels} кан.")
+    } else if offline > 0 {
+        format!("{name}: {channels} каналов, не в сети: {offline}")
     } else {
         format!("{name}: {channels} каналов")
     };
 }
 
-fn run_hik_live(
+enum HikSource {
+    Live { channel: u16, main: bool },
+    /// Epoch seconds in device-local time, like every stamp in the archive UI.
+    Archive { track: u32, begin: i64, end: i64, label: String },
+}
+
+fn open_hik(host: &str, user: &str, password: &str, source: &HikSource, from: i64) -> Result<xm_nvr::HikStream, String> {
+    let opened = match source {
+        HikSource::Live { channel, main } => xm_nvr::HikStream::open(host, user, password, *channel, *main),
+        HikSource::Archive { track, end, .. } => {
+            xm_nvr::HikStream::open_playback(host, user, password, *track, &epoch_stamp(from), &epoch_stamp(*end)).0
+        }
+    };
+    opened.map_err(|err| {
+        let text = err.to_string();
+        if text.contains(":554:") {
+            format!("{text}. Для видео нужен открытый порт 554")
+        } else {
+            text
+        }
+    })
+}
+
+fn epoch_wall(epoch: i64) -> Option<WallTime> {
+    let (year, month, day, hour, minute, second) = parse_stamp(&epoch_stamp(epoch))?;
+    Some(WallTime {
+        year: u16::try_from(year).ok()?,
+        month: month as u8,
+        day: day as u8,
+        hour: hour as u8,
+        minute: minute as u8,
+        second: second as u8,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_hik(
     slot: Arc<StreamSlot>,
     generation: u64,
     status: Arc<Mutex<String>>,
     host: String,
     user: String,
     password: String,
-    channel: u16,
-    stream: StreamKind,
+    source: HikSource,
     hwaccel: bool,
 ) {
     if !slot.still(generation) {
         return;
     }
-    let mut rtsp = match xm_nvr::HikStream::open(
-        &host,
-        &user,
-        &password,
-        channel + 1,
-        stream == StreamKind::Main,
-    ) {
+    let (live, mut position, finish) = match &source {
+        HikSource::Live { .. } => (true, 0, 0),
+        HikSource::Archive { begin, end, .. } => (false, *begin, *end),
+    };
+    let mut rtsp = match open_hik(&host, &user, &password, &source, position) {
         Ok(rtsp) => rtsp,
         Err(err) => {
             if slot.still(generation) {
-                let text = err.to_string();
-                *status.lock().unwrap() = if text.contains(":554:") {
-                    format!("{text}. Для видео нужен открытый порт 554")
-                } else {
-                    text
-                };
+                *status.lock().unwrap() = err;
             }
             return;
         }
@@ -8877,22 +9081,100 @@ fn run_hik_live(
     let mut resume_key = false;
     let mut fed = 0u32;
     let mut shown = false;
+    let mut sound = HikSound::new(rtsp.audio().cloned());
+    let mut started = Instant::now();
+    let mut video_nals = 0u64;
+    let mut warned = false;
+    let mut first_stamp: Option<u32> = None;
+    let mut applied_speed = 1u8;
     while slot.still(generation) {
-        let nal = match rtsp.read_nal() {
-            Ok(nal) => nal,
+        if !live {
+            let seek = slot.seek_to.lock().unwrap().take();
+            if let Some(at) = seek.as_deref().and_then(stamp_epoch) {
+                match open_hik(&host, &user, &password, &source, at) {
+                    Ok(next) => {
+                        rtsp = next;
+                        if let Ok(socket) = rtsp.clone_socket() {
+                            slot.arm(generation, socket);
+                        }
+                        position = at;
+                        first_stamp = None;
+                        applied_speed = 1;
+                        codec = rtsp.codec();
+                        decoder = None;
+                        primed = false;
+                        fed = 0;
+                        started = Instant::now();
+                    }
+                    Err(err) => {
+                        if slot.still(generation) {
+                            *status.lock().unwrap() = format!("Регистратор не перемотал на это место: {err}");
+                        }
+                    }
+                }
+            }
+            let want = normalize_speed(slot.play_speed.load(Ordering::Relaxed));
+            if want != applied_speed {
+                if rtsp.set_speed(want).is_err() && slot.still(generation) {
+                    *status.lock().unwrap() =
+                        format!("Регистратор не принял скорость {}", speed_label(want));
+                }
+                applied_speed = want;
+            }
+        }
+        let piece = match rtsp.read_piece() {
+            Ok(piece) => piece,
             Err(_) => {
                 if slot.still(generation) {
-                    *status.lock().unwrap() = "поток Hikvision прервался".into();
+                    let near_end = slot
+                        .clock
+                        .lock()
+                        .unwrap()
+                        .is_some_and(|time| wall_epoch(time) >= finish - 5);
+                    *status.lock().unwrap() = if !live && near_end {
+                        "Запись закончилась".into()
+                    } else {
+                        "поток Hikvision прервался".into()
+                    };
                 }
                 break;
             }
         };
+        sound.follow(&slot, &status);
+        let nal = match piece {
+            xm_nvr::HikPiece::Video(nal) => nal,
+            xm_nvr::HikPiece::Audio(data) => {
+                sound.feed(&slot, &status, &data);
+                continue;
+            }
+        };
+        video_nals += 1;
+        if !live {
+            let first = *first_stamp.get_or_insert(nal.timestamp);
+            let offset = i64::from(nal.timestamp.wrapping_sub(first)) / 90_000;
+            if let Some(time) = epoch_wall(position + offset) {
+                if slot.still(generation) {
+                    *slot.clock.lock().unwrap() = Some(time);
+                }
+            }
+        }
+        if !shown && !warned && started.elapsed() > Duration::from_secs(10) && slot.still(generation) {
+            warned = true;
+            let name = if codec == Codec::H265 { "H.265" } else { "H.264" };
+            *status.lock().unwrap() = if fed == 0 {
+                format!("Hikvision: видео {name} идёт ({video_nals} NAL), но ключевого кадра нет")
+            } else if hwaccel {
+                format!("Hikvision: видео {name} идёт, картинки нет. Попробуйте выключить аппаратное ускорение")
+            } else {
+                format!("Hikvision: видео {name} идёт, картинки нет")
+            };
+        }
         if nal.codec != codec {
             codec = nal.codec;
             decoder = None;
             primed = false;
         }
-        if !slot.awake.load(Ordering::Acquire) {
+        if live && !slot.awake.load(Ordering::Acquire) {
             resume_key = true;
             continue;
         }
@@ -8927,8 +9209,20 @@ fn run_hik_live(
             primed = true;
             resume_key = false;
         }
-        if !shown && slot.picture.lock().unwrap().seq > 0 {
-            shown = true;
+        if !shown {
+            let (seq, width, height) = {
+                let picture = slot.picture.lock().unwrap();
+                (picture.seq, picture.width, picture.height)
+            };
+            if seq > 0 {
+                shown = true;
+                if let HikSource::Archive { label, .. } = &source {
+                    let name = if codec == Codec::H265 { "H.265" } else { "H.264" };
+                    if slot.still(generation) {
+                        *status.lock().unwrap() = format!("{label} · {name} {width}×{height}");
+                    }
+                }
+            }
         }
         if hw && !shown && fed > 80 {
             hw = false;
@@ -8936,6 +9230,210 @@ fn run_hik_live(
             primed = false;
             fed = 0;
         }
+    }
+}
+
+struct HikSound {
+    format: Option<xm_nvr::HikAudio>,
+    listening: bool,
+    pcm: Vec<i16>,
+    aac: Option<AacDecoder>,
+    aac_failed: bool,
+}
+
+impl HikSound {
+    fn new(format: Option<xm_nvr::HikAudio>) -> Self {
+        Self {
+            format,
+            listening: false,
+            pcm: Vec::new(),
+            aac: None,
+            aac_failed: false,
+        }
+    }
+
+    fn follow(&mut self, slot: &Arc<StreamSlot>, status: &Mutex<String>) {
+        let listening = slot.audio_out.lock().unwrap().is_some();
+        if listening == self.listening {
+            return;
+        }
+        self.listening = listening;
+        if !listening {
+            self.pcm.clear();
+            self.aac = None;
+            self.aac_failed = false;
+            return;
+        }
+        let warning = match self.format.as_ref().map(|format| &format.codec) {
+            None => Some(
+                "Звука в этом потоке нет. В настройках камеры или регистратора выберите для потока тип «Видео и аудио»"
+                    .to_string(),
+            ),
+            Some(xm_nvr::HikAudioCodec::Other(name)) => Some(format!(
+                "Аудиокодек камеры {name} не поддерживается. Выберите в её настройках G.711 или AAC"
+            )),
+            _ => None,
+        };
+        if let Some(warning) = warning {
+            *status.lock().unwrap() = warning;
+        }
+    }
+
+    fn feed(&mut self, slot: &Arc<StreamSlot>, status: &Mutex<String>, data: &[u8]) {
+        if !self.listening {
+            return;
+        }
+        let Some(format) = self.format.as_ref() else {
+            return;
+        };
+        let samples: Vec<i16> = match format.codec {
+            xm_nvr::HikAudioCodec::Pcmu => data.iter().copied().map(ulaw_decode).collect(),
+            xm_nvr::HikAudioCodec::Pcma => data.iter().copied().map(alaw_decode).collect(),
+            xm_nvr::HikAudioCodec::L16 => {
+                let channels = usize::from(format.channels.max(1));
+                data.chunks_exact(2 * channels)
+                    .map(|frame| {
+                        let sum: i32 = frame
+                            .chunks_exact(2)
+                            .map(|pair| i32::from(i16::from_be_bytes([pair[0], pair[1]])))
+                            .sum();
+                        (sum / channels as i32) as i16
+                    })
+                    .collect()
+            }
+            xm_nvr::HikAudioCodec::Aac => {
+                if self.aac.is_none() && !self.aac_failed {
+                    match AacDecoder::spawn(format.rate, Arc::clone(slot)) {
+                        Ok(decoder) => self.aac = Some(decoder),
+                        Err(err) => {
+                            self.aac_failed = true;
+                            *status.lock().unwrap() = format!("Звук: {err}");
+                        }
+                    }
+                }
+                if let Some(decoder) = self.aac.as_ref() {
+                    decoder.push(data);
+                }
+                return;
+            }
+            xm_nvr::HikAudioCodec::Other(_) => return,
+        };
+        self.pcm.extend(samples);
+        if self.pcm.len() < (format.rate as usize / 25).max(1) {
+            return;
+        }
+        let samples = std::mem::take(&mut self.pcm);
+        let sender = slot.audio_out.lock().unwrap().clone();
+        if let Some(sender) = sender {
+            let _ = sender.try_send(PcmChunk {
+                rate: format.rate,
+                samples,
+            });
+        }
+    }
+}
+
+struct AacDecoder {
+    child: Child,
+    feed: Option<SyncSender<Vec<u8>>>,
+}
+
+impl AacDecoder {
+    fn spawn(rate: u32, slot: Arc<StreamSlot>) -> Result<Self, String> {
+        let rate = if rate == 0 { 16_000 } else { rate };
+        let rate_arg = rate.to_string();
+        let mut command = Command::new(ffmpeg_path());
+        command
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-fflags",
+                "nobuffer",
+                "-probesize",
+                "32",
+                "-analyzeduration",
+                "0",
+                "-f",
+                "aac",
+                "-i",
+                "pipe:0",
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                &rate_arg,
+                "-f",
+                "s16le",
+                "-flush_packets",
+                "1",
+                "pipe:1",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
+        let mut child = command.spawn().map_err(|err| {
+            format!("не удалось запустить ffmpeg ({}): {err}", ffmpeg_path())
+        })?;
+        let (Some(mut stdin), Some(mut stdout)) = (child.stdin.take(), child.stdout.take()) else {
+            let _ = child.kill();
+            return Err("ffmpeg не открыл каналы для звука".into());
+        };
+        let (feed, frames) = mpsc::sync_channel::<Vec<u8>>(64);
+        thread::spawn(move || {
+            while let Ok(frame) = frames.recv() {
+                if stdin.write_all(&frame).and_then(|_| stdin.flush()).is_err() {
+                    break;
+                }
+            }
+        });
+        thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            let mut carry: Option<u8> = None;
+            loop {
+                let count = match stdout.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => count,
+                };
+                let mut bytes = Vec::with_capacity(count + 1);
+                bytes.extend(carry.take());
+                bytes.extend_from_slice(&buf[..count]);
+                if bytes.len() % 2 == 1 {
+                    carry = bytes.pop();
+                }
+                let samples: Vec<i16> = bytes
+                    .chunks_exact(2)
+                    .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+                    .collect();
+                let sender = slot.audio_out.lock().unwrap().clone();
+                if let Some(sender) = sender {
+                    let _ = sender.try_send(PcmChunk { rate, samples });
+                }
+            }
+        });
+        Ok(Self {
+            child,
+            feed: Some(feed),
+        })
+    }
+
+    fn push(&self, frame: &[u8]) {
+        if let Some(feed) = &self.feed {
+            let _ = feed.try_send(frame.to_vec());
+        }
+    }
+}
+
+impl Drop for AacDecoder {
+    fn drop(&mut self) {
+        self.feed = None;
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -10106,5 +10604,41 @@ impl WaveOut {
         unsafe {
             waveOutClose(self.handle);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(stamp: &str) -> i64 {
+        stamp_epoch(stamp).unwrap()
+    }
+
+    #[test]
+    fn fit_range_keeps_the_other_end_when_it_fits() {
+        let start = at("2026-10-09 00:00:00");
+        let end = at("2026-10-11 00:00:00");
+        let picked = at("2026-10-10 12:00:00");
+        assert_eq!(fit_range(picked, start, end, false), (start, picked));
+        assert_eq!(fit_range(picked, start, end, true), (picked, end));
+    }
+
+    #[test]
+    fn fit_range_moves_the_other_end_along_with_a_far_pick() {
+        let start = at("2026-10-09 00:00:00");
+        let end = at("2026-10-11 00:00:00");
+        assert_eq!(
+            fit_range(at("2026-10-18 00:00:00"), start, end, true),
+            (at("2026-10-18 00:00:00"), at("2026-10-20 00:00:00"))
+        );
+        assert_eq!(
+            fit_range(at("2026-10-18 23:59:59"), start, end, false),
+            (at("2026-10-16 23:59:59"), at("2026-10-18 23:59:59"))
+        );
+        assert_eq!(
+            fit_range(at("2026-10-02 23:59:59"), start, end, false),
+            (at("2026-09-30 23:59:59"), at("2026-10-02 23:59:59"))
+        );
     }
 }

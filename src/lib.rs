@@ -9,8 +9,9 @@ mod packet;
 mod session;
 
 pub use hikvision::{
-    call_status as hik_call_status, describe as hik_describe, open_door as hik_open_door, DoorCall,
-    HikInfo, HikStream,
+    call_status as hik_call_status, describe as hik_describe, download as hik_download,
+    open_door as hik_open_door, playback_uri as hik_playback_uri, search as hik_search, DoorCall,
+    HikAudio, HikAudioCodec, HikChannel, HikInfo, HikPiece, HikRecord, HikStream,
 };
 
 pub use error::Error;

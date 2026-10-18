@@ -4,6 +4,15 @@
 xm-settings.json
 /snapshots/
 
+# recordings saved by xm-view and xm-nvr
+*.h264
+*.h265
+*.ps
+*.pcm
+*.mp4
+*.part
+/downloads/
+
 # binaries and archives
 *.exe
 *.rar
