@@ -25,8 +25,8 @@ fn main() {
 
 const VERSION_INFO: &str = r#"
 1 VERSIONINFO
-FILEVERSION 1,1,0,0
-PRODUCTVERSION 1,1,0,0
+FILEVERSION 1,2,0,0
+PRODUCTVERSION 1,2,0,0
 FILEFLAGSMASK 0x3F
 FILEFLAGS 0
 FILEOS 0x40004
@@ -38,24 +38,24 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "eXUnity LAB"
             VALUE "FileDescription", "eXUnity Observer"
-            VALUE "FileVersion", "1.1.0"
+            VALUE "FileVersion", "1.2.0"
             VALUE "InternalName", "Observer"
             VALUE "LegalCopyright", "© eXUnity LAB"
             VALUE "OriginalFilename", "xm-view.exe"
             VALUE "ProductName", "eXUnity Observer"
-            VALUE "ProductVersion", "1.1.0"
+            VALUE "ProductVersion", "1.2.0"
             VALUE "Comments", "Программа видеонаблюдения"
         END
         BLOCK "040904B0"
         BEGIN
             VALUE "CompanyName", "eXUnity LAB"
             VALUE "FileDescription", "eXUnity Observer"
-            VALUE "FileVersion", "1.1.0"
+            VALUE "FileVersion", "1.2.0"
             VALUE "InternalName", "Observer"
             VALUE "LegalCopyright", "© eXUnity LAB"
             VALUE "OriginalFilename", "xm-view.exe"
             VALUE "ProductName", "eXUnity Observer"
-            VALUE "ProductVersion", "1.1.0"
+            VALUE "ProductVersion", "1.2.0"
             VALUE "Comments", "Программа видеонаблюдения"
         END
     END
