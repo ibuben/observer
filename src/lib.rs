@@ -1,6 +1,8 @@
 //! Протокол Xiongmai (DVRIP) по TCP, порт 34567.
 //! Подключение только по IP: локальный адрес или белый адрес с пробросом порта.
 
+#[macro_use]
+pub mod i18n;
 mod error;
 mod frame;
 mod hash;
@@ -15,6 +17,7 @@ pub use hikvision::{
 };
 
 pub use error::Error;
+pub use i18n::tr;
 pub use hash::sofia_hash;
 pub use frame::{sniff_codec, AudioFrame, Codec, Frame, VideoFrame, WallTime};
 pub use session::{

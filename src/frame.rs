@@ -161,17 +161,12 @@ pub fn pull_frame(buf: &mut Vec<u8>) -> Result<Option<Frame>, Error> {
             (8, len, placeholder)
         }
         _ => {
-            return Err(Error::Protocol(format!(
-                "неизвестный кадр {:08X}",
-                kind
-            )));
+            return Err(Error::Protocol(trf!("неизвестный кадр {kind}", kind = format!("{:08X}", kind))));
         }
     };
 
     if media_len > MAX_FRAME {
-        return Err(Error::Protocol(format!(
-            "кадр {media_len} байт больше допустимого"
-        )));
+        return Err(Error::Protocol(trf!("кадр {media_len} байт больше допустимого", media_len = media_len)));
     }
     if buf.len() < header_len + media_len {
         return Ok(None);

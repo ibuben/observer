@@ -15,6 +15,7 @@ use eframe::egui;
 use egui_phosphor::regular as ph;
 
 mod config;
+use xm_nvr::{tr, trf};
 use xm_nvr::{
     hik_call_status, sniff_codec, sofia_hash, AudioFrame, Codec, DeviceLog, DoorCall, LivePiece,
     PlaybackSpec, Recording, Session, StreamKind, WallTime,
@@ -195,11 +196,11 @@ fn tune_list_selection(ui: &mut egui::Ui) {
 
 fn accent_presets() -> [(&'static str, [u8; 3]); 5] {
     [
-        ("Целадон", [78, 196, 176]),
-        ("Синий", [88, 156, 232]),
-        ("Янтарь", [224, 168, 72]),
-        ("Коралл", [214, 112, 96]),
-        ("Фиолетовый", [168, 132, 220]),
+        (tr("Целадон"), [78, 196, 176]),
+        (tr("Синий"), [88, 156, 232]),
+        (tr("Янтарь"), [224, 168, 72]),
+        (tr("Коралл"), [214, 112, 96]),
+        (tr("Фиолетовый"), [168, 132, 220]),
     ]
 }
 
@@ -814,6 +815,8 @@ struct Viewer {
     default_stream: StreamKind,
     hwaccel: bool,
     download_mp4: bool,
+    language: String,
+    languages: Vec<xm_nvr::i18n::LanguageInfo>,
     accent: egui::Color32,
     focus: Option<usize>,
     selected_cell: usize,
@@ -881,6 +884,7 @@ struct Viewer {
 impl Viewer {
     fn new(logo: Option<egui::TextureHandle>) -> Self {
         let saved = Settings::load();
+        let language = start_language(&saved.language);
         let devices: Vec<LiveDevice> = saved
             .devices
             .into_iter()
@@ -898,9 +902,9 @@ impl Viewer {
             cells[index].source = *source;
         }
         let status = if devices.is_empty() {
-            "Добавьте регистратор в разделе «Устройства».".into()
+            tr("Добавьте регистратор в разделе «Устройства».").into()
         } else {
-            "Подключение устройств…".into()
+            tr("Подключение устройств…").into()
         };
         let status = Arc::new(Mutex::new(status));
         let page = page_from_name(&saved.page);
@@ -967,6 +971,8 @@ impl Viewer {
     default_stream: stream_from_name(&saved.stream),
             hwaccel: saved.hwaccel,
             download_mp4: saved.download_mp4,
+            language,
+            languages: xm_nvr::i18n::available(&language_dir()),
             accent: accent_from_rgb(saved.accent),
             focus: None,
             selected_cell: 0,
@@ -1084,6 +1090,7 @@ impl Viewer {
             aspect: aspect_name_saved(self.aspect).into(),
             page: page_name(self.page),
             cells: self.cells.iter().map(|cell| cell.source).collect(),
+            language: self.language.clone(),
         };
         serde_json::to_string_pretty(&settings).unwrap_or_default()
     }
@@ -1111,7 +1118,7 @@ impl Viewer {
             .iter()
             .find(|item| item.id == id)
             .or_else(|| devices.first())
-            .ok_or("Добавьте устройство")?;
+            .ok_or(tr("Добавьте устройство"))?;
         Ok((
             device.kind,
             device.host.clone(),
@@ -1163,10 +1170,10 @@ impl Viewer {
     fn download_caption(&self) -> String {
         let got = self.download_got.load(Ordering::Relaxed);
         match self.download_percent() {
-            Some(percent) if got > 0 => format!("Скачивание {percent}% · {}", format_bytes(got)),
-            Some(percent) => format!("Скачивание {percent}%"),
-            None if got > 0 => format!("Скачивание {}…", format_bytes(got)),
-            None => "Скачивание…".into(),
+            Some(percent) if got > 0 => trf!("Скачивание {percent}% · {got}", percent = percent, got = format_bytes(got)),
+            Some(percent) => trf!("Скачивание {percent}%", percent = percent),
+            None if got > 0 => trf!("Скачивание {got}…", got = format_bytes(got)),
+            None => tr("Скачивание…").into(),
         }
     }
 
@@ -1194,8 +1201,8 @@ impl Viewer {
         }
         self.stream = stream;
         self.set_status(match stream {
-            StreamKind::Main => "Основной поток",
-            StreamKind::Extra => "Дополнительный поток",
+            StreamKind::Main => tr("Основной поток"),
+            StreamKind::Extra => tr("Дополнительный поток"),
         });
         if self.page == Page::Live {
             self.sync_streams();
@@ -1317,7 +1324,7 @@ impl Viewer {
 
     fn focus_shown(&mut self, source: Source) {
         let Some(index) = self.find_shown(source) else {
-            self.set_status("Эта камера не открыта в сетке");
+            self.set_status(tr("Эта камера не открыта в сетке"));
             return;
         };
         self.selected_cell = index;
@@ -1353,7 +1360,7 @@ impl Viewer {
         }
         let stream = self.stream_kind();
         let name = self.source_label(source);
-        self.set_status(format!("Открываю {name}"));
+        self.set_status(trf!("Открываю {name}", name = name));
         self.start_cell(index, source, stream);
     }
 
@@ -1419,7 +1426,7 @@ impl Viewer {
             sources
         };
         if sources.is_empty() {
-            self.set_status("Нет каналов: дождитесь подключения или добавьте устройство");
+            self.set_status(tr("Нет каналов: дождитесь подключения или добавьте устройство"));
             return;
         }
         let visible = if self.focus.is_some() {
@@ -1438,11 +1445,7 @@ impl Viewer {
         }
         self.enforce_unique_sources();
         self.sync_streams();
-        self.set_status(format!(
-            "Сетка: {} из {} каналов",
-            visible.min(sources.len()),
-            sources.len()
-        ));
+        self.set_status(trf!("Сетка: {visible} из {sources} каналов", visible = visible.min(sources.len()), sources = sources.len()));
     }
 
     fn start_cell(&mut self, index: usize, source: Source, stream: StreamKind) {
@@ -1502,13 +1505,13 @@ impl Viewer {
         let port = match self.port.trim().parse::<u16>() {
             Ok(port) => port,
             Err(_) => {
-                self.set_status("порт должен быть числом");
+                self.set_status(tr("порт должен быть числом"));
                 return false;
             }
         };
         let host = self.host.trim().to_string();
         if host.is_empty() {
-            self.set_status("нужен адрес регистратора");
+            self.set_status(tr("нужен адрес регистратора"));
             return false;
         }
         let id = self.next_id;
@@ -1546,7 +1549,7 @@ impl Viewer {
         self.draft_name.clear();
         self.host.clear();
         self.password.clear();
-        self.set_status("Подключение…");
+        self.set_status(tr("Подключение…"));
         self.probe(id);
         true
     }
@@ -1555,13 +1558,13 @@ impl Viewer {
         let port = match self.port.trim().parse::<u16>() {
             Ok(port) => port,
             Err(_) => {
-                self.set_status("порт должен быть числом");
+                self.set_status(tr("порт должен быть числом"));
                 return false;
             }
         };
         let host = self.host.trim().to_string();
         if host.is_empty() {
-            self.set_status("нужен адрес регистратора");
+            self.set_status(tr("нужен адрес регистратора"));
             return false;
         }
         let name = {
@@ -1596,7 +1599,7 @@ impl Viewer {
             true
         };
         if found {
-            self.set_status("Подключение…");
+            self.set_status(tr("Подключение…"));
             self.probe(id);
         }
         found
@@ -1621,7 +1624,7 @@ impl Viewer {
                 .map(|device| device.id)
                 .unwrap_or(0);
         }
-        self.set_status("Устройство удалено");
+        self.set_status(tr("Устройство удалено"));
     }
 
     fn refresh_links(&mut self) {
@@ -1726,7 +1729,7 @@ impl Viewer {
         self.download_draft = None;
         self.recordings.lock().unwrap().clear();
         let channel = self.archive_channel;
-        self.set_status("Поиск записей…");
+        self.set_status(tr("Поиск записей…"));
         let status = Arc::clone(&self.status);
         let recordings = Arc::clone(&self.recordings);
         if kind == Vendor::Hikvision {
@@ -1746,9 +1749,9 @@ impl Viewer {
                             })
                             .collect();
                         *status.lock().unwrap() = if count == 0 {
-                            "За этот период записей нет".to_string()
+                            tr("За этот период записей нет").to_string()
                         } else {
-                            format!("Записей: {count}")
+                            trf!("Записей: {count}", count = count)
                         };
                     }
                     Err(err) => *status.lock().unwrap() = err.to_string(),
@@ -1762,9 +1765,9 @@ impl Viewer {
                     let count = files.len();
                     *recordings.lock().unwrap() = files;
                     *status.lock().unwrap() = if count == 0 {
-                        "За этот период записей нет".to_string()
+                        tr("За этот период записей нет").to_string()
                     } else {
-                        format!("Записей: {count}")
+                        trf!("Записей: {count}", count = count)
                     };
                 }
                 Err(err) => *status.lock().unwrap() = err.to_string(),
@@ -1817,14 +1820,14 @@ impl Viewer {
             self.journal.lock().unwrap().clear();
             self.journal_busy.store(false, Ordering::Release);
             self.set_status(if hikvision {
-                "Журнал Hikvision пока не подключён"
+                tr("Журнал Hikvision пока не подключён")
             } else {
-                "Добавьте регистратор"
+                tr("Добавьте регистратор")
             });
             return;
         }
         self.journal.lock().unwrap().clear();
-        self.set_status("Читаю журнал регистраторов…");
+        self.set_status(tr("Читаю журнал регистраторов…"));
         let status = Arc::clone(&self.status);
         let rows = Arc::clone(&self.journal);
         let busy = Arc::clone(&self.journal_busy);
@@ -1855,15 +1858,15 @@ impl Viewer {
             let count = all.len();
             *rows.lock().unwrap() = all;
             let mut text = if count == 0 {
-                "За этот период событий нет".to_string()
+                tr("За этот период событий нет").to_string()
             } else {
-                format!("Событий: {count}")
+                trf!("Событий: {count}", count = count)
             };
             if let Some(err) = failed.first() {
                 text = format!("{text} · {err}");
             }
             if hikvision {
-                text = format!("{text} · журнал Hikvision пока не подключён");
+                text = trf!("{text} · журнал Hikvision пока не подключён", text = text);
             }
             *status.lock().unwrap() = text;
             busy.store(false, Ordering::Release);
@@ -1887,11 +1890,11 @@ impl Viewer {
             end: recording.end.clone(),
         });
         self.seek_preview = None;
-        let label = format!("Архив {} – {}", recording.begin, recording.end);
-        self.set_status(format!("{label}: ожидание кадра…"));
+        let label = trf!("Архив {begin} – {end}", begin = recording.begin, end = recording.end);
+        self.set_status(trf!("{label}: ожидание кадра…", label = label));
         if kind == Vendor::Hikvision {
             let (Some(begin), Some(end)) = (stamp_epoch(&recording.begin), stamp_epoch(&recording.end)) else {
-                self.set_status("У записи нет времени начала или конца");
+                self.set_status(tr("У записи нет времени начала или конца"));
                 return;
             };
             let source = HikSource::Archive {
@@ -1940,7 +1943,7 @@ impl Viewer {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            self.set_status("Уже скачивается другой файл");
+            self.set_status(tr("Уже скачивается другой файл"));
             return;
         }
         let (kind, host, port, user, password) =
@@ -1969,7 +1972,7 @@ impl Viewer {
         if !recording.path.is_empty() {
             *self.download_path.lock().unwrap() = recording.path.clone();
         }
-        self.set_status(format!("Скачиваю {}…", path.display()));
+        self.set_status(trf!("Скачиваю {path}…", path = path.display()));
         let status = Arc::clone(&self.status);
         let busy = Arc::clone(&self.download_busy);
         let got = Arc::clone(&self.download_got);
@@ -1984,10 +1987,7 @@ impl Viewer {
             };
             let ps_path = dir.join(format!("{stem}.ps"));
             let part = dir.join(format!("{stem}.ps.part"));
-            self.set_status(format!(
-                "Скачиваю {}…",
-                if pack { mp4_path.display() } else { ps_path.display() }
-            ));
+            self.set_status(trf!("Скачиваю {value}…", value = if pack { mp4_path.display() } else { ps_path.display() }));
             thread::spawn(move || {
                 let result = File::create(&part)
                     .map_err(|err| err.to_string())
@@ -2002,43 +2002,35 @@ impl Viewer {
                 *status.lock().unwrap() = match result {
                     Err(_) if cancelled => {
                         let _ = std::fs::remove_file(&part);
-                        "Скачивание отменено".into()
+                        tr("Скачивание отменено").into()
                     }
                     Err(err) => {
                         let _ = std::fs::remove_file(&part);
-                        format!("Не удалось скачать: {err}")
+                        trf!("Не удалось скачать: {err}", err = err)
                     }
                     Ok(bytes) if pack => {
-                        *status.lock().unwrap() = "Собираю MP4…".into();
+                        *status.lock().unwrap() = tr("Собираю MP4…").into();
                         match pack_ps_mp4(&part, &mp4_path, &cancel) {
                             Ok(()) => {
                                 let _ = std::fs::remove_file(&part);
                                 let size = std::fs::metadata(&mp4_path).map(|item| item.len()).unwrap_or(bytes);
-                                format!(
-                                    "Сохранено {} · {} · картинка без перекодирования",
-                                    mp4_path.display(),
-                                    format_bytes(size)
-                                )
+                                trf!("Сохранено {mp4_path} · {size} · картинка без перекодирования", mp4_path = mp4_path.display(), size = format_bytes(size))
                             }
                             Err(_) if cancel.load(Ordering::Acquire) => {
                                 let _ = std::fs::remove_file(&part);
                                 let _ = std::fs::remove_file(&mp4_path);
-                                "Скачивание отменено".into()
+                                tr("Скачивание отменено").into()
                             }
                             Err(err) => {
                                 let _ = std::fs::remove_file(&mp4_path);
                                 let _ = std::fs::rename(&part, &ps_path);
-                                format!("Не удалось собрать MP4: {err}. Оставлен файл {}", ps_path.display())
+                                trf!("Не удалось собрать MP4: {err}. Оставлен файл {ps_path}", err = err, ps_path = ps_path.display())
                             }
                         }
                     }
                     Ok(bytes) => {
                         let _ = std::fs::rename(&part, &ps_path);
-                        format!(
-                            "Сохранено {} · {} · файл регистратора (MPEG-PS)",
-                            ps_path.display(),
-                            format_bytes(bytes)
-                        )
+                        trf!("Сохранено {ps_path} · {bytes} · файл регистратора (MPEG-PS)", ps_path = ps_path.display(), bytes = format_bytes(bytes))
                     }
                 };
                 busy.store(false, Ordering::Release);
@@ -2069,7 +2061,7 @@ impl Viewer {
                 let mut session =
                     Session::connect(&host, port, &user, &password).map_err(|err| err.to_string())?;
                 if cancel.load(Ordering::Acquire) {
-                    return Err("скачивание отменено".into());
+                    return Err(tr("скачивание отменено").into());
                 }
                 let stats = session
                     .download_with(
@@ -2113,7 +2105,7 @@ impl Viewer {
             };
             match result {
                 Ok((bytes, fps, rate)) if pack => {
-                    *status.lock().unwrap() = "Собираю MP4…".into();
+                    *status.lock().unwrap() = tr("Собираю MP4…").into();
                     let audio = (rate > 0).then_some(pcm_path.as_path());
                     match pack_mp4(&part_path, audio, rate, fps, &mp4_path, &cancel)
                     {
@@ -2122,16 +2114,16 @@ impl Viewer {
                             let _ = std::fs::remove_file(&pcm_path);
                             let size = std::fs::metadata(&mp4_path).map(|item| item.len()).unwrap_or(bytes);
                             let sound = if rate > 0 {
-                                "картинка без перекодирования, звук AAC"
+                                tr("картинка без перекодирования, звук AAC")
                             } else {
-                                "картинка без перекодирования, в записи не было звука"
+                                tr("картинка без перекодирования, в записи не было звука")
                             };
                             *status.lock().unwrap() =
-                                format!("Сохранено {} · {} · {sound}", mp4_path.display(), format_bytes(size));
+                                trf!("Сохранено {mp4_path} · {size} · {sound}", mp4_path = mp4_path.display(), size = format_bytes(size), sound = sound);
                         }
-                        Err(err) if cancel.load(Ordering::Acquire) || err == "скачивание отменено" => {
+                        Err(err) if cancel.load(Ordering::Acquire) || err == tr("скачивание отменено") => {
                             remove_temps();
-                            *status.lock().unwrap() = "Скачивание отменено".into();
+                            *status.lock().unwrap() = tr("Скачивание отменено").into();
                         }
                         Err(err) => {
                             let _ = std::fs::remove_file(&pcm_path);
@@ -2147,27 +2139,20 @@ impl Viewer {
                                     raw_path.clone()
                                 }
                             };
-                            *status.lock().unwrap() = format!(
-                                "Не удалось собрать MP4: {err}. Оставлен поток {}",
-                                kept.display()
-                            );
+                            *status.lock().unwrap() = trf!("Не удалось собрать MP4: {err}. Оставлен поток {kept}", err = err, kept = kept.display());
                         }
                     }
                 }
                 Ok((bytes, _, _)) => {
-                    *status.lock().unwrap() = format!(
-                        "Сохранено {} · {} · поток без контейнера",
-                        raw_path.display(),
-                        format_bytes(bytes)
-                    );
+                    *status.lock().unwrap() = trf!("Сохранено {raw_path} · {bytes} · поток без контейнера", raw_path = raw_path.display(), bytes = format_bytes(bytes));
                 }
-                Err(err) if cancel.load(Ordering::Acquire) || err == "скачивание отменено" => {
+                Err(err) if cancel.load(Ordering::Acquire) || err == tr("скачивание отменено") => {
                     remove_temps();
-                    *status.lock().unwrap() = "Скачивание отменено".into();
+                    *status.lock().unwrap() = tr("Скачивание отменено").into();
                 }
                 Err(err) => {
                     remove_temps();
-                    *status.lock().unwrap() = format!("Не удалось скачать: {err}");
+                    *status.lock().unwrap() = trf!("Не удалось скачать: {err}", err = err);
                 }
             }
             busy.store(false, Ordering::Release);
@@ -2181,20 +2166,20 @@ impl Viewer {
         if self.download_cancel.swap(true, Ordering::AcqRel) {
             return;
         }
-        self.set_status("Отменяю скачивание…");
+        self.set_status(tr("Отменяю скачивание…"));
     }
 
     fn reveal_downloads(&mut self) {
         let dir = download_dir();
         match open_external(dir.as_os_str()) {
             Ok(child) => drop(child),
-            Err(err) => self.set_status(format!("Не удалось открыть папку: {err}")),
+            Err(err) => self.set_status(trf!("Не удалось открыть папку: {err}", err = err)),
         }
     }
 
     fn open_download(&mut self, recording: Recording) {
         if self.download_busy.load(Ordering::Acquire) {
-            self.set_status("Уже скачивается другой файл");
+            self.set_status(tr("Уже скачивается другой файл"));
             return;
         }
         if let Err(err) = self.device_credentials(self.archive_device) {
@@ -2244,7 +2229,7 @@ impl Viewer {
         let picture = cell.slot.picture.lock().unwrap();
         if picture.rgba.is_empty() || picture.width == 0 {
             drop(picture);
-            self.set_status("В выбранной ячейке нет кадра");
+            self.set_status(tr("В выбранной ячейке нет кадра"));
             return;
         }
         let width = picture.width;
@@ -2255,8 +2240,8 @@ impl Viewer {
         let name = format!("cell-{}-{:03}.jpg", index + 1, picture_stamp());
         let path = dir.join(name);
         match save_jpg(&path, width, height, &rgba) {
-            Ok(()) => self.set_status(format!("Снимок {}", path.display())),
-            Err(err) => self.set_status(format!("Не удалось сохранить снимок: {err}")),
+            Ok(()) => self.set_status(trf!("Снимок {path}", path = path.display())),
+            Err(err) => self.set_status(trf!("Не удалось сохранить снимок: {err}", err = err)),
         }
     }
 
@@ -2400,7 +2385,7 @@ impl eframe::App for Viewer {
                         .id_salt("screen-tabs")
                         .show(ui, |ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
-                            if tab(ui, ph::HOUSE, "Главная", self.page == Page::Home, false)
+                            if tab(ui, ph::HOUSE, tr("Главная"), self.page == Page::Home, false)
                                 == Some(TabHit::Open)
                             {
                                 switch = Some(Page::Home);
@@ -2460,13 +2445,13 @@ impl eframe::App for Viewer {
                             ui.add_space(14.0);
                             if ui
                                 .button(ph::ARROWS_OUT)
-                                .on_hover_text("На весь экран. Esc — выйти")
+                                .on_hover_text(tr("На весь экран. Esc — выйти"))
                                 .clicked()
                             {
                                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
                             }
                             ui.add_space(8.0);
-                            if ui.button(with_icon(ph::CAMERA, "Снимок")).clicked() {
+                            if ui.button(with_icon(ph::CAMERA, tr("Снимок"))).clicked() {
                                 self.snapshot_selected();
                             }
                             ui.add_space(12.0);
@@ -2481,7 +2466,7 @@ impl eframe::App for Viewer {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             polish_toolbar(ui);
                             ui.add_space(14.0);
-                            if ui.button(with_icon(ph::PLUS, "Добавить")).clicked() {
+                            if ui.button(with_icon(ph::PLUS, tr("Добавить"))).clicked() {
                                 self.open_device_form(None);
                             }
                         });
@@ -2497,11 +2482,11 @@ impl eframe::App for Viewer {
                 .show_separator_line(false)
                 .show(ctx, |ui| {
                     ui.add_space(10.0);
-                    ui.label(accent_label(ui, with_icon(ph::HARD_DRIVES, "Устройства"), 15.0));
+                    ui.label(accent_label(ui, with_icon(ph::HARD_DRIVES, tr("Устройства")), 15.0));
                     ui.add_space(8.0);
                     if devices.is_empty() {
-                        ui.label(egui::RichText::new("Регистраторы не добавлены.").color(MUTED));
-                        if ui.button(with_icon(ph::PLUS, "Добавить устройство")).clicked() {
+                        ui.label(egui::RichText::new(tr("Регистраторы не добавлены.")).color(MUTED));
+                        if ui.button(with_icon(ph::PLUS, tr("Добавить устройство"))).clicked() {
                             self.set_page(Page::Device);
                         }
                     } else {
@@ -2527,7 +2512,7 @@ impl eframe::App for Viewer {
                             && ui
                                 .add_sized(
                                     [ui.available_width(), 30.0],
-                                    egui::Button::new(with_icon(ph::SQUARES_FOUR, "Открыть все каналы")),
+                                    egui::Button::new(with_icon(ph::SQUARES_FOUR, tr("Открыть все каналы"))),
                                 )
                                 .clicked()
                         {
@@ -2538,14 +2523,12 @@ impl eframe::App for Viewer {
                         }
                         let live: usize = devices.iter().map(live_channel_count).sum();
                         ui.label(
-                            egui::RichText::new(format!(
-                                "{live} на связи · {total} каналов"
-                            ))
+                            egui::RichText::new(trf!("{live} на связи · {total} каналов", live = live, total = total))
                             .color(MUTED),
                         );
                         if archive {
                             ui.add_space(12.0);
-                            ui.label(accent_label(ui, with_icon(ph::LIST_BULLETS, "Файлы"), 15.0));
+                            ui.label(accent_label(ui, with_icon(ph::LIST_BULLETS, tr("Файлы")), 15.0));
                             ui.add_space(6.0);
                             self.archive_files(ui, &recordings);
                         }
@@ -2626,7 +2609,7 @@ impl Viewer {
         let mut save = false;
         let mut cancel = false;
         let busy = self.rename_busy.load(Ordering::SeqCst);
-        egui::Window::new("Имя канала")
+        egui::Window::new(tr("Имя канала"))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -2635,12 +2618,12 @@ impl Viewer {
                 let Some(draft) = self.rename.as_mut() else {
                     return;
                 };
-                ui.label("Новое имя запишется на регистратор.");
+                ui.label(tr("Новое имя запишется на регистратор."));
                 ui.add_space(8.0);
                 if draft.text.chars().count() > 32 {
                     draft.text = draft.text.chars().take(32).collect();
                 }
-                let edit = text_field(ui, &mut draft.text, false, 320.0, "до 32 символов");
+                let edit = text_field(ui, &mut draft.text, false, 320.0, tr("до 32 символов"));
                 if draft.focus {
                     edit.request_focus();
                     draft.focus = false;
@@ -2651,14 +2634,14 @@ impl Viewer {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     let button = egui::Button::new(if busy {
-                        with_icon(ph::FLOPPY_DISK, "Запись…")
+                        with_icon(ph::FLOPPY_DISK, tr("Запись…"))
                     } else {
-                        with_icon(ph::CHECK, "Сохранить")
+                        with_icon(ph::CHECK, tr("Сохранить"))
                     });
                     if ui.add_sized([150.0, 30.0], button).clicked() && !busy {
                         save = true;
                     }
-                    if ui.button(with_icon(ph::X, "Отмена")).clicked() {
+                    if ui.button(with_icon(ph::X, tr("Отмена"))).clicked() {
                         cancel = true;
                     }
                 });
@@ -2677,15 +2660,15 @@ impl Viewer {
     fn rename_channel(&mut self, device_id: u64, channel: u16, title: String) {
         let title = title.trim().to_string();
         if title.is_empty() {
-            self.set_status("Введите имя канала");
+            self.set_status(tr("Введите имя канала"));
             return;
         }
         if title.chars().count() > 32 {
-            self.set_status("Имя длиннее 32 символов");
+            self.set_status(tr("Имя длиннее 32 символов"));
             return;
         }
         if self.rename_busy.swap(true, Ordering::SeqCst) {
-            self.set_status("Предыдущее имя ещё записывается");
+            self.set_status(tr("Предыдущее имя ещё записывается"));
             return;
         }
         let found = self.devices.lock().unwrap().iter().find_map(|device| {
@@ -2701,18 +2684,18 @@ impl Viewer {
         });
         let Some((kind, host, port, user, password)) = found else {
             self.rename_busy.store(false, Ordering::SeqCst);
-            self.set_status("Устройство не найдено");
+            self.set_status(tr("Устройство не найдено"));
             return;
         };
         if kind == Vendor::Hikvision {
             self.rename_busy.store(false, Ordering::SeqCst);
-            self.set_status("Имя канала Hikvision задаётся на самом устройстве");
+            self.set_status(tr("Имя канала Hikvision задаётся на самом устройстве"));
             return;
         }
         let devices = Arc::clone(&self.devices);
         let status = Arc::clone(&self.status);
         let busy = Arc::clone(&self.rename_busy);
-        *status.lock().unwrap() = "Запись имени на регистратор…".into();
+        *status.lock().unwrap() = tr("Запись имени на регистратор…").into();
         thread::spawn(move || {
             let written = (|| {
                 let mut session = Session::connect(&host, port, &user, &password)?;
@@ -2728,10 +2711,10 @@ impl Viewer {
                     {
                         device.titles = titles;
                     }
-                    *status.lock().unwrap() = "Имя канала записано на регистратор".into();
+                    *status.lock().unwrap() = tr("Имя канала записано на регистратор").into();
                 }
                 Err(err) => {
-                    *status.lock().unwrap() = format!("Имя не записалось: {err}");
+                    *status.lock().unwrap() = trf!("Имя не записалось: {err}", err = err);
                 }
             }
             busy.store(false, Ordering::SeqCst);
@@ -2748,12 +2731,12 @@ impl Viewer {
                 if index > 0 {
                     ui.add_space(18.0);
                 }
-                ui.label(egui::RichText::new(title).color(MUTED).size(13.0));
+                ui.label(egui::RichText::new(tr(title)).color(MUTED).size(13.0));
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
                     for &(label, page) in items {
-                        if home_tile(ui, page_icon(page), label).clicked() {
+                        if home_tile(ui, page_icon(page), tr(label)).clicked() {
                             chosen = Some(page);
                         }
                     }
@@ -2812,7 +2795,7 @@ impl Viewer {
             .get(index)
             .and_then(|cell| cell.source)
             .map(|source| self.source_label(source))
-            .unwrap_or_else(|| "Пусто".into());
+            .unwrap_or_else(|| tr("Пусто").into());
         let galley = ui.painter().layout_no_wrap(
             title,
             egui::FontId::proportional(13.0),
@@ -2866,7 +2849,7 @@ impl Viewer {
             }
             response.context_menu(|ui| {
                 tune_menu(ui);
-                if ui.button(with_icon(ph::PENCIL_SIMPLE, "Переименовать")).clicked() {
+                if ui.button(with_icon(ph::PENCIL_SIMPLE, tr("Переименовать"))).clicked() {
                     let text = {
                         let devices = self.devices.lock().unwrap();
                         let device = devices.iter().find(|item| item.id == source.device_id);
@@ -2907,7 +2890,7 @@ impl Viewer {
                 .get(index)
                 .and_then(|cell| cell.source)
                 .map(|source| self.source_label(source))
-                .unwrap_or_else(|| "Пусто".into());
+                .unwrap_or_else(|| tr("Пусто").into());
             let listening = self.audio_cell == Some(index);
             let title_color = if self.cells.get(index).and_then(|cell| cell.source).is_some() {
                 TEXT
@@ -2965,7 +2948,7 @@ impl Viewer {
             ui.painter().text(
                 video.center(),
                 egui::Align2::CENTER_CENTER,
-                "Выберите канал справа",
+                tr("Выберите канал справа"),
                 egui::FontId::proportional(13.0),
                 MUTED,
             );
@@ -3054,8 +3037,8 @@ impl Viewer {
 
     fn door_button(&mut self, ui: &mut egui::Ui) {
         if ui
-            .button(with_icon(ph::LOCK_KEY_OPEN, "Открыть замок"))
-            .on_hover_text("Открыть замок домофона")
+            .button(with_icon(ph::LOCK_KEY_OPEN, tr("Открыть замок")))
+            .on_hover_text(tr("Открыть замок домофона"))
             .clicked()
         {
             let index = self.focus.unwrap_or(self.selected_cell);
@@ -3187,7 +3170,7 @@ impl Viewer {
             door_id,
         });
         self.call_ended = false;
-        self.set_status("Звонок в домофон");
+        self.set_status(tr("Звонок в домофон"));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
@@ -3227,16 +3210,16 @@ impl Viewer {
         let ended = self.call_ended;
         let phase = self.call_phase;
         let name = if self.call_door_name.is_empty() {
-            "Домофон".to_string()
+            tr("Домофон").to_string()
         } else {
             self.call_door_name.clone()
         };
         let title = if ended {
-            "Вызов завершён"
+            tr("Вызов завершён")
         } else if phase == DoorPhase::Talk {
-            "Разговор"
+            tr("Разговор")
         } else {
-            "Звонок в домофон"
+            tr("Звонок в домофон")
         };
         let screen = ctx.screen_rect();
         let width = (screen.width() - 48.0).clamp(320.0, 560.0);
@@ -3263,11 +3246,11 @@ impl Viewer {
                             ui.add_space(8.0);
                             ui.label(egui::RichText::new(name).color(MUTED));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button("Закрыть").clicked() {
+                                if ui.button(tr("Закрыть")).clicked() {
                                     close = true;
                                 }
                                 if ui
-                                    .button(with_icon(ph::LOCK_KEY_OPEN, "Открыть замок"))
+                                    .button(with_icon(ph::LOCK_KEY_OPEN, tr("Открыть замок")))
                                     .clicked()
                                 {
                                     unlock = true;
@@ -3295,7 +3278,7 @@ impl Viewer {
             .iter()
             .find(|device| device.id == id)
             .map(|device| (device.display_name(), device.host.clone()))
-            .unwrap_or_else(|| ("Домофон".into(), String::new()));
+            .unwrap_or_else(|| (tr("Домофон").into(), String::new()));
         let where_text = if host.is_empty() || name == host {
             name
         } else {
@@ -3428,7 +3411,7 @@ impl Viewer {
         paint_tracked(
             painter,
             text_center + egui::vec2(-18.0, 0.0),
-            "ОТКРЫТЬ",
+            tr("ОТКРЫТЬ"),
             15.0,
             egui::Color32::from_rgb(168, 176, 188),
             1.6,
@@ -3471,15 +3454,15 @@ impl Viewer {
             })
         });
         let Some((host, port, user, password)) = found else {
-            self.set_status("Это не домофон Hikvision");
+            self.set_status(tr("Это не домофон Hikvision"));
             return;
         };
-        self.set_status("Открываю замок…");
+        self.set_status(tr("Открываю замок…"));
         let status = Arc::clone(&self.status);
         thread::spawn(move || {
             let message = match xm_nvr::hik_open_door(&host, port, &user, &password) {
-                Ok(()) => "Замок открыт".to_string(),
-                Err(err) => format!("Замок не открылся: {err}"),
+                Ok(()) => tr("Замок открыт").to_string(),
+                Err(err) => trf!("Замок не открылся: {err}", err = err),
             };
             *status.lock().unwrap() = message;
         });
@@ -3500,7 +3483,7 @@ impl Viewer {
                 }
             })
             .response
-            .on_hover_text("Размер сетки");
+            .on_hover_text(tr("Размер сетки"));
         if layout != self.layout {
             self.set_layout(layout);
         }
@@ -3509,8 +3492,8 @@ impl Viewer {
     fn stream_combo(&mut self, ui: &mut egui::Ui) {
         let mut stream = self.stream;
         let (icon, name) = match stream {
-            StreamKind::Main => (ph::MONITOR, "Основной"),
-            StreamKind::Extra => (ph::PICTURE_IN_PICTURE, "Доп."),
+            StreamKind::Main => (ph::MONITOR, tr("Основной")),
+            StreamKind::Extra => (ph::PICTURE_IN_PICTURE, tr("Доп.")),
         };
         egui::ComboBox::from_id_salt("stream-bar")
             .selected_text(with_icon(icon, name))
@@ -3519,16 +3502,16 @@ impl Viewer {
                 ui.selectable_value(
                     &mut stream,
                     StreamKind::Extra,
-                    with_icon(ph::PICTURE_IN_PICTURE, "Дополнительный"),
+                    with_icon(ph::PICTURE_IN_PICTURE, tr("Дополнительный")),
                 );
                 ui.selectable_value(
                     &mut stream,
                     StreamKind::Main,
-                    with_icon(ph::MONITOR, "Основной"),
+                    with_icon(ph::MONITOR, tr("Основной")),
                 );
             })
             .response
-            .on_hover_text("Поток. Действует до закрытия программы.");
+            .on_hover_text(tr("Поток. Действует до закрытия программы."));
         if stream != self.stream {
             self.set_stream(stream);
         }
@@ -3542,12 +3525,12 @@ impl Viewer {
                 ui.selectable_value(
                     &mut self.aspect,
                     Aspect::Auto,
-                    with_icon(ph::FRAME_CORNERS, "Авто"),
+                    with_icon(ph::FRAME_CORNERS, tr("Авто")),
                 );
                 ui.selectable_value(
                     &mut self.aspect,
                     Aspect::Original,
-                    with_icon(ph::ARROWS_OUT, "Оригинал"),
+                    with_icon(ph::ARROWS_OUT, tr("Оригинал")),
                 );
                 ui.selectable_value(&mut self.aspect, Aspect::R4x3, "4:3");
                 ui.selectable_value(&mut self.aspect, Aspect::R16x9, "16:9");
@@ -3558,13 +3541,13 @@ impl Viewer {
         let index = self.focus.unwrap_or(self.selected_cell);
         let on = self.audio_cell == Some(index);
         let label = if on {
-            with_icon(ph::SPEAKER_HIGH, "Звук")
+            with_icon(ph::SPEAKER_HIGH, tr("Звук"))
         } else {
-            with_icon(ph::SPEAKER_SLASH, "Звук")
+            with_icon(ph::SPEAKER_SLASH, tr("Звук"))
         };
         if ui
             .selectable_label(on, label)
-            .on_hover_text("Слушать микрофон выбранной камеры")
+            .on_hover_text(tr("Слушать микрофон выбранной камеры"))
             .clicked()
         {
             if on {
@@ -3581,11 +3564,11 @@ impl Viewer {
         }
         self.audio_cell = None;
         let Some(index) = index else {
-            self.set_status("Звук выключен");
+            self.set_status(tr("Звук выключен"));
             return;
         };
         if self.cells.get(index).and_then(|cell| cell.source).is_none() {
-            self.set_status("Сначала выберите камеру");
+            self.set_status(tr("Сначала выберите камеру"));
             return;
         }
         let (tx, rx) = mpsc::sync_channel(24);
@@ -3593,13 +3576,13 @@ impl Viewer {
         thread::spawn(move || play_audio(rx, status));
         *self.cells[index].slot.audio_out.lock().unwrap() = Some(tx);
         self.audio_cell = Some(index);
-        self.set_status("Звук камеры");
+        self.set_status(tr("Звук камеры"));
     }
 
     fn ptz_toggle(&mut self, ui: &mut egui::Ui) {
         let response = ui
             .selectable_label(self.ptz_open, ph::CROSSHAIR)
-            .on_hover_text("Управление камерой");
+            .on_hover_text(tr("Управление камерой"));
         if response.clicked() {
             self.ptz_open = !self.ptz_open;
             if !self.ptz_open {
@@ -3673,7 +3656,7 @@ impl Viewer {
         painter.text(
             egui::pos2(pad.left() + 12.0, track.center().y),
             egui::Align2::LEFT_CENTER,
-            "Скорость",
+            tr("Скорость"),
             egui::FontId::proportional(12.0),
             MUTED,
         );
@@ -3808,13 +3791,13 @@ impl Viewer {
         egui::Frame::new()
             .inner_margin(egui::Margin::same(22))
             .show(ui, |ui| {
-                ui.label(accent_label(ui, with_icon(ph::SLIDERS, "Конфигуратор"), 22.0));
+                ui.label(accent_label(ui, with_icon(ph::SLIDERS, tr("Конфигуратор")), 22.0));
                 ui.add_space(4.0);
                 if xm.is_empty() {
                     let text = if hikvision {
-                        "Конфигуратор Hikvision пока не подключён"
+                        tr("Конфигуратор Hikvision пока не подключён")
                     } else {
-                        "Добавьте регистратор XM"
+                        tr("Добавьте регистратор XM")
                     };
                     ui.label(egui::RichText::new(text).color(MUTED));
                     return;
@@ -3832,7 +3815,7 @@ impl Viewer {
                         .iter()
                         .find(|device| device.id == self.config_device)
                         .map(|device| device.display_name())
-                        .unwrap_or_else(|| "Регистратор".into());
+                        .unwrap_or_else(|| tr("Регистратор").into());
                     egui::ComboBox::from_id_salt("config-device")
                         .selected_text(current)
                         .width(220.0)
@@ -3851,7 +3834,7 @@ impl Viewer {
                                 }
                             }
                         });
-                    if ui.button(with_icon(ph::ARROW_CLOCKWISE, "Обновить")).clicked() {
+                    if ui.button(with_icon(ph::ARROW_CLOCKWISE, tr("Обновить"))).clicked() {
                         reload = true;
                     }
                     let section = self.config_section;
@@ -3863,7 +3846,7 @@ impl Viewer {
                         && ui
                             .add_enabled(
                                 !self.config_busy.load(Ordering::Acquire),
-                                egui::Button::new(with_icon(ph::CHECK, "Сохранить")),
+                                egui::Button::new(with_icon(ph::CHECK, tr("Сохранить"))),
                             )
                             .clicked()
                     {
@@ -3873,14 +3856,14 @@ impl Viewer {
                 if hikvision {
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new("Конфигуратор Hikvision пока не подключён").color(MUTED),
+                        egui::RichText::new(tr("Конфигуратор Hikvision пока не подключён")).color(MUTED),
                     );
                 }
                 ui.add_space(12.0);
                 if self.config_busy.load(Ordering::Acquire)
                     && self.config_bundle.lock().unwrap().is_none()
                 {
-                    ui.label(egui::RichText::new("Читаю настройки регистратора…").color(MUTED));
+                    ui.label(egui::RichText::new(tr("Читаю настройки регистратора…")).color(MUTED));
                     return;
                 }
                 let mut bundle = self.config_bundle.lock().unwrap().clone();
@@ -3967,7 +3950,7 @@ impl Viewer {
             .get(self.config_channel as usize)
             .filter(|text| !text.is_empty())
             .cloned()
-            .unwrap_or_else(|| format!("Канал {}", self.config_channel + 1));
+            .unwrap_or_else(|| trf!("Канал {value}", value = self.config_channel + 1));
         tune_inputs(ui);
         egui::ComboBox::from_id_salt("config-channel")
             .selected_text(format!("{} · {label}", self.config_channel + 1))
@@ -3979,7 +3962,7 @@ impl Viewer {
                         .get(index)
                         .filter(|text| !text.is_empty())
                         .cloned()
-                        .unwrap_or_else(|| format!("Канал {}", index + 1));
+                        .unwrap_or_else(|| trf!("Канал {value}", value = index + 1));
                     ui.selectable_value(
                         &mut self.config_channel,
                         index as u16,
@@ -3991,10 +3974,10 @@ impl Viewer {
     }
 
     fn config_channels(&mut self, ui: &mut egui::Ui, bundle: &mut config::ConfigBundle) {
-        ui.label(accent_label(ui, "Имена каналов", 15.0));
+        ui.label(accent_label(ui, tr("Имена каналов"), 15.0));
         ui.add_space(8.0);
         if bundle.titles.is_empty() {
-            ui.label(egui::RichText::new("Регистратор не отдал имена каналов.").color(MUTED));
+            ui.label(egui::RichText::new(tr("Регистратор не отдал имена каналов.")).color(MUTED));
         }
         for (index, title) in bundle.titles.iter_mut().enumerate() {
             ui.horizontal(|ui| {
@@ -4004,7 +3987,7 @@ impl Viewer {
         }
         ui.add_space(16.0);
         if let Some(name) = bundle.encode_name() {
-            ui.label(accent_label(ui, "Потоки", 15.0));
+            ui.label(accent_label(ui, tr("Потоки"), 15.0));
             ui.add_space(8.0);
             let channel = self.config_channel as usize;
             let count = bundle
@@ -4020,14 +4003,14 @@ impl Viewer {
                 .and_then(|value| value.as_array_mut())
                 .and_then(|items| items.get_mut(channel))
             {
-                config_encode_block(ui, item, "MainFormat", "Основной поток");
+                config_encode_block(ui, item, "MainFormat", tr("Основной поток"));
                 ui.add_space(8.0);
-                config_encode_block(ui, item, "ExtraFormat", "Дополнительный поток");
+                config_encode_block(ui, item, "ExtraFormat", tr("Дополнительный поток"));
             }
         } else {
             ui.label(
                 egui::RichText::new(
-                    "Этот регистратор не отдаёт параметры потока. Имена каналов сохраняются.",
+                    tr("Этот регистратор не отдаёт параметры потока. Имена каналов сохраняются."),
                 )
                 .color(MUTED),
             );
@@ -4043,9 +4026,9 @@ impl Viewer {
             .unwrap_or(0);
         self.config_channel_picker(ui, count, &bundle.titles);
         let channel = self.config_channel as usize;
-        config_detect_block(ui, bundle, "Detect.MotionDetect", "Движение", channel, true);
-        config_detect_block(ui, bundle, "Detect.BlindDetect", "Заслонение", channel, false);
-        config_detect_block(ui, bundle, "Detect.LossDetect", "Потеря видео", channel, false);
+        config_detect_block(ui, bundle, "Detect.MotionDetect", tr("Движение"), channel, true);
+        config_detect_block(ui, bundle, "Detect.BlindDetect", tr("Заслонение"), channel, false);
+        config_detect_block(ui, bundle, "Detect.LossDetect", tr("Потеря видео"), channel, false);
     }
 
     fn config_record(&mut self, ui: &mut egui::Ui, bundle: &mut config::ConfigBundle) {
@@ -4056,7 +4039,7 @@ impl Viewer {
             .map(|items| items.len())
             .unwrap_or(0);
         if count == 0 {
-            ui.label(egui::RichText::new("Расписание записи не пришло.").color(MUTED));
+            ui.label(egui::RichText::new(tr("Расписание записи не пришло.")).color(MUTED));
             return;
         }
         let titles = bundle.titles.clone();
@@ -4072,7 +4055,7 @@ impl Viewer {
         let mut mode = config::object_string(item, "RecordMode");
         ui.horizontal(|ui| {
             tune_inputs(ui);
-            ui.label("Режим");
+            ui.label(tr("Режим"));
             egui::ComboBox::from_id_salt("record-mode")
                 .selected_text(record_mode_label(&mode))
                 .width(220.0)
@@ -4085,10 +4068,10 @@ impl Viewer {
         });
         config::set_object_string(item, "RecordMode", mode);
         ui.add_space(8.0);
-        config_int_row(ui, item, "PacketLength", "Длина файла, мин", 1, 120);
-        config_int_row(ui, item, "PreRecord", "Предзапись, с", 0, 30);
+        config_int_row(ui, item, "PacketLength", tr("Длина файла, мин"), 1, 120);
+        config_int_row(ui, item, "PreRecord", tr("Предзапись, с"), 0, 30);
         ui.add_space(12.0);
-        ui.label(accent_label(ui, "Расписание", 15.0));
+        ui.label(accent_label(ui, tr("Расписание"), 15.0));
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
@@ -4122,9 +4105,9 @@ impl Viewer {
             let mut alarm = mask & 4 != 0;
             let mut changed = false;
             ui.horizontal(|ui| {
-                changed |= ui.checkbox(&mut regular, "Постоянно").changed();
-                changed |= ui.checkbox(&mut motion, "Движение").changed();
-                changed |= ui.checkbox(&mut alarm, "Тревога").changed();
+                changed |= ui.checkbox(&mut regular, tr("Постоянно")).changed();
+                changed |= ui.checkbox(&mut motion, tr("Движение")).changed();
+                changed |= ui.checkbox(&mut alarm, tr("Тревога")).changed();
                 changed |= text_field(ui, &mut start, false, 96.0, "").changed();
                 ui.label("—");
                 changed |= text_field(ui, &mut end, false, 96.0, "").changed();
@@ -4139,20 +4122,20 @@ impl Viewer {
         }
         ui.add_space(6.0);
         ui.label(
-            egui::RichText::new("Нулевой тип выключает интервал. Конец 24:00:00 — до полуночи.")
+            egui::RichText::new(tr("Нулевой тип выключает интервал. Конец 24:00:00 — до полуночи."))
                 .color(MUTED),
         );
     }
 
     fn config_general(&mut self, ui: &mut egui::Ui, bundle: &mut config::ConfigBundle) {
         if let Some(general) = bundle.values.get_mut("General.General") {
-            ui.label(accent_label(ui, "Устройство", 15.0));
+            ui.label(accent_label(ui, tr("Устройство"), 15.0));
             ui.add_space(8.0);
-            labeled_config_text(ui, general, "MachineName", "Имя", 280.0);
+            labeled_config_text(ui, general, "MachineName", tr("Имя"), 280.0);
             let mut overwrite = config::object_string(general, "OverWrite");
             ui.horizontal(|ui| {
                 tune_inputs(ui);
-                ui.label("Диск заполнен");
+                ui.label(tr("Диск заполнен"));
                 egui::ComboBox::from_id_salt("overwrite")
                     .selected_text(overwrite_label(&overwrite))
                     .width(220.0)
@@ -4164,25 +4147,25 @@ impl Viewer {
                     });
             });
             config::set_object_string(general, "OverWrite", overwrite);
-            config_int_row(ui, general, "AutoLogout", "Автовыход, мин", 0, 120);
-            config_choice(ui, general, "VideoOutPut", "Видеовыход", VIDEO_OUTPUT);
+            config_int_row(ui, general, "AutoLogout", tr("Автовыход, мин"), 0, 120);
+            config_choice(ui, general, "VideoOutPut", tr("Видеовыход"), VIDEO_OUTPUT);
             ui.label(
-                egui::RichText::new("Куда регистратор выводит свой экран: HDMI, VGA или выбирает сам.")
+                egui::RichText::new(tr("Куда регистратор выводит свой экран: HDMI, VGA или выбирает сам."))
                     .color(MUTED),
             );
             ui.add_space(16.0);
         }
         if let Some(location) = bundle.values.get_mut("General.Location") {
-            ui.label(accent_label(ui, "Регион", 15.0));
+            ui.label(accent_label(ui, tr("Регион"), 15.0));
             ui.add_space(8.0);
-            config_choice(ui, location, "Language", "Язык", LOCATION_LANGUAGES);
-            config_choice(ui, location, "VideoFormat", "Формат видео", LOCATION_VIDEO);
-            config_choice(ui, location, "DateFormat", "Формат даты", LOCATION_DATE);
-            config_choice(ui, location, "TimeFormat", "Формат времени", LOCATION_TIME);
-            config_choice(ui, location, "DateSeparator", "Разделитель даты", LOCATION_SEPARATOR);
+            config_choice(ui, location, "Language", tr("Язык"), LOCATION_LANGUAGES);
+            config_choice(ui, location, "VideoFormat", tr("Формат видео"), LOCATION_VIDEO);
+            config_choice(ui, location, "DateFormat", tr("Формат даты"), LOCATION_DATE);
+            config_choice(ui, location, "TimeFormat", tr("Формат времени"), LOCATION_TIME);
+            config_choice(ui, location, "DateSeparator", tr("Разделитель даты"), LOCATION_SEPARATOR);
             ui.add_space(16.0);
         }
-        ui.label(accent_label(ui, "Время", 15.0));
+        ui.label(accent_label(ui, tr("Время"), 15.0));
         ui.add_space(8.0);
         self.config_clock_row(ui, bundle);
         ui.add_space(8.0);
@@ -4192,13 +4175,13 @@ impl Viewer {
         }
         if let Some(ntp) = bundle.values.get_mut("NetWork.NetNTP") {
             let mut enable = config::object_bool(ntp, "Enable");
-            if ui.checkbox(&mut enable, "Синхронизация NTP").changed() {
+            if ui.checkbox(&mut enable, tr("Синхронизация NTP")).changed() {
                 config::set_object_bool(ntp, "Enable", enable);
             }
             if let Some(server) = ntp.get_mut("Server") {
-                labeled_config_text(ui, server, "Name", "Сервер", 280.0);
+                labeled_config_text(ui, server, "Name", tr("Сервер"), 280.0);
             }
-            config_int_row(ui, ntp, "UpdatePeriod", "Период, мин", 1, 10_080);
+            config_int_row(ui, ntp, "UpdatePeriod", tr("Период, мин"), 1, 10_080);
         }
     }
 
@@ -4222,49 +4205,49 @@ impl Viewer {
             .and_then(|value| value.as_array_mut())
             .and_then(|items| items.get_mut(channel))
         {
-            ui.label(accent_label(ui, "Подпись на экране", 15.0));
+            ui.label(accent_label(ui, tr("Подпись на экране"), 15.0));
             ui.add_space(8.0);
             if let Some(title) = widget.get_mut("ChannelTitle") {
-                labeled_config_text(ui, title, "Name", "Текст", 280.0);
+                labeled_config_text(ui, title, "Name", tr("Текст"), 280.0);
             }
-            blend_pair(ui, widget, "ChannelTitleAttribute", "Имя канала");
-            blend_pair(ui, widget, "TimeTitleAttribute", "Время");
+            blend_pair(ui, widget, "ChannelTitleAttribute", tr("Имя канала"));
+            blend_pair(ui, widget, "TimeTitleAttribute", tr("Время"));
             ui.add_space(16.0);
         }
         if let Some(Some(camera)) = bundle.camera.get_mut(channel) {
-            ui.label(accent_label(ui, "Сенсор", 15.0));
+            ui.label(accent_label(ui, tr("Сенсор"), 15.0));
             ui.add_space(8.0);
-            config_int_row(ui, camera, "ElecLevel", "Уровень экспозиции", 0, 100);
+            config_int_row(ui, camera, "ElecLevel", tr("Уровень экспозиции"), 0, 100);
             if let Some(gain) = camera.get_mut("GainParam") {
-                config_int_row(ui, gain, "Gain", "Усиление", 0, 100);
+                config_int_row(ui, gain, "Gain", tr("Усиление"), 0, 100);
             }
-            hex_flag(ui, camera, "PictureMirror", "Зеркало");
-            hex_flag(ui, camera, "PictureFlip", "Переворот");
+            hex_flag(ui, camera, "PictureMirror", tr("Зеркало"));
+            hex_flag(ui, camera, "PictureFlip", tr("Переворот"));
             ui.label(
                 egui::RichText::new(
-                    "Яркость и контраст отдельной настройкой этот регистратор не отдаёт.",
+                    tr("Яркость и контраст отдельной настройкой этот регистратор не отдаёт."),
                 )
                 .color(MUTED),
             );
         } else if !bundle.has("AVEnc.VideoWidget") {
-            ui.label(egui::RichText::new("Картинка канала не пришла.").color(MUTED));
+            ui.label(egui::RichText::new(tr("Картинка канала не пришла.")).color(MUTED));
         }
     }
 
     fn config_network(&mut self, ui: &mut egui::Ui, bundle: &mut config::ConfigBundle) {
         ui.label(
             egui::RichText::new(
-                "Сохранение может сменить адрес. Регистратор тогда пропадёт из программы, пока устройство не откроют заново.",
+                tr("Сохранение может сменить адрес. Регистратор тогда пропадёт из программы, пока устройство не откроют заново."),
             )
             .color(MUTED),
         );
         ui.add_space(10.0);
         if bundle.has("NetWork.NetCommon") {
-            labeled_draft(ui, &mut bundle.net_host, "Адрес");
-            labeled_draft(ui, &mut bundle.net_mask, "Маска");
-            labeled_draft(ui, &mut bundle.net_gate, "Шлюз");
+            labeled_draft(ui, &mut bundle.net_host, tr("Адрес"));
+            labeled_draft(ui, &mut bundle.net_mask, tr("Маска"));
+            labeled_draft(ui, &mut bundle.net_gate, tr("Шлюз"));
             if let Some(net) = bundle.values.get_mut("NetWork.NetCommon") {
-                labeled_config_text(ui, net, "HostName", "Имя", 220.0);
+                labeled_config_text(ui, net, "HostName", tr("Имя"), 220.0);
                 config_int_row(ui, net, "HttpPort", "HTTP", 1, 65535);
                 config_int_row(ui, net, "TCPPort", "TCP", 1, 65535);
                 config_int_row(ui, net, "UDPPort", "UDP", 1, 65535);
@@ -4293,13 +4276,13 @@ impl Viewer {
         ui.add_space(12.0);
         ui.label(accent_label(ui, "DNS", 15.0));
         ui.add_space(6.0);
-        labeled_draft(ui, &mut bundle.net_dns, "Основной");
-        labeled_draft(ui, &mut bundle.net_dns2, "Запасной");
+        labeled_draft(ui, &mut bundle.net_dns, tr("Основной"));
+        labeled_draft(ui, &mut bundle.net_dns2, tr("Запасной"));
     }
 
     fn config_disk(&mut self, ui: &mut egui::Ui, bundle: &mut config::ConfigBundle) {
         ui.label(
-            egui::RichText::new("Форматирование стирает записи на выбранном разделе.").color(MUTED),
+            egui::RichText::new(tr("Форматирование стирает записи на выбранном разделе.")).color(MUTED),
         );
         ui.add_space(10.0);
         let mut format = None;
@@ -4308,7 +4291,7 @@ impl Viewer {
                 let physical = config::object_i64(disk, "PlysicalNo").max(0) as usize;
                 ui.label(accent_label(
                     ui,
-                    format!("Диск {}", physical + 1),
+                    trf!("Диск {value}", value = physical + 1),
                     15.0,
                 ));
                 ui.add_space(6.0);
@@ -4321,16 +4304,11 @@ impl Viewer {
                         continue;
                     }
                     let status = if config::object_i64(item, "Status") == 0 {
-                        "исправен"
+                        tr("исправен")
                     } else {
-                        "проверьте"
+                        tr("проверьте")
                     };
-                    ui.label(format!(
-                        "Раздел {} · {} свободно из {} · {status}",
-                        part + 1,
-                        config::format_space(&config::object_string(item, "RemainSpace")),
-                        config::format_space(&total),
-                    ));
+                    ui.label(trf!("Раздел {value} · {value2} свободно из {total} · {status}", value = part + 1, value2 = config::format_space(&config::object_string(item, "RemainSpace")), total = config::format_space(&total), status = status));
                     ui.label(
                         egui::RichText::new(format!(
                             "{} — {}",
@@ -4339,7 +4317,7 @@ impl Viewer {
                         ))
                         .color(MUTED),
                     );
-                    if ui.button(with_icon(ph::TRASH, "Форматировать")).clicked() {
+                    if ui.button(with_icon(ph::TRASH, tr("Форматировать"))).clicked() {
                         format = Some((physical, part));
                     }
                     ui.add_space(8.0);
@@ -4358,7 +4336,7 @@ impl Viewer {
 
     fn config_users(&mut self, ui: &mut egui::Ui, bundle: &mut config::ConfigBundle) {
         let Some(users) = bundle.users.as_array() else {
-            ui.label(egui::RichText::new("Список пользователей не пришёл.").color(MUTED));
+            ui.label(egui::RichText::new(tr("Список пользователей не пришёл.")).color(MUTED));
             return;
         };
         if users.is_empty() {
@@ -4387,23 +4365,23 @@ impl Viewer {
             });
         if let Some(user) = users.get(self.config_user) {
             ui.add_space(8.0);
-            ui.label(format!("Группа {}", config::object_string(user, "Group")));
+            ui.label(trf!("Группа {value}", value = config::object_string(user, "Group")));
         }
         ui.add_space(8.0);
-        field_label(ui, "Новый пароль");
+        field_label(ui, tr("Новый пароль"));
         text_field(ui, &mut self.config_password, true, 220.0, "");
         ui.label(
-            egui::RichText::new("Пустое поле оставляет текущий пароль. В статус он не пишется.")
+            egui::RichText::new(tr("Пустое поле оставляет текущий пароль. В статус он не пишется."))
                 .color(MUTED),
         );
     }
 
     fn config_maintain(&mut self, ui: &mut egui::Ui) {
         ui.label(
-            egui::RichText::new("Перезагрузка на время оборвёт просмотр и запись.").color(MUTED),
+            egui::RichText::new(tr("Перезагрузка на время оборвёт просмотр и запись.")).color(MUTED),
         );
         ui.add_space(10.0);
-        if ui.button(with_icon(ph::ARROW_CLOCKWISE, "Перезагрузить регистратор")).clicked() {
+        if ui.button(with_icon(ph::ARROW_CLOCKWISE, tr("Перезагрузить регистратор"))).clicked() {
             self.config_confirm = Some(ConfigConfirm::Reboot);
         }
     }
@@ -4450,7 +4428,7 @@ impl Viewer {
         self.config_time_draft.clear();
         self.config_time_editing = false;
         self.config_password.clear();
-        *status.lock().unwrap() = "Читаю настройки регистратора…".into();
+        *status.lock().unwrap() = tr("Читаю настройки регистратора…").into();
         thread::spawn(move || {
             let loaded = read_config_bundle(&device);
             if tokens.load(Ordering::Acquire) == token {
@@ -4497,14 +4475,14 @@ impl Viewer {
             .find(|item| item.id == self.config_device && item.kind == Vendor::Xm)
             .cloned()
         else {
-            self.set_status("Регистратор не найден");
+            self.set_status(tr("Регистратор не найден"));
             return;
         };
         if section == config::ConfigSection::General
             && self.config_time_editing
             && stamp_epoch(&self.config_time_draft).is_none()
         {
-            self.set_status("Время указано не полностью");
+            self.set_status(tr("Время указано не полностью"));
             return;
         }
         let password = std::mem::take(&mut self.config_password);
@@ -4532,7 +4510,7 @@ impl Viewer {
             running.clone().unwrap_or_else(|| bundle.time.clone())
         };
         ui.horizontal(|ui| {
-            ui.label("Часы регистратора");
+            ui.label(tr("Часы регистратора"));
             let response = text_field(ui, &mut shown, false, 180.0, "");
             if response.changed() {
                 self.config_time_draft = shown.clone();
@@ -4557,7 +4535,7 @@ impl Viewer {
             }
         });
         ui.label(
-            egui::RichText::new("С момента чтения идут по часам компьютера, сохранение отправляет текущее значение.")
+            egui::RichText::new(tr("С момента чтения идут по часам компьютера, сохранение отправляет текущее значение."))
                 .color(MUTED),
         );
     }
@@ -4568,7 +4546,7 @@ impl Viewer {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            self.set_status("Настройки ещё читаются");
+            self.set_status(tr("Настройки ещё читаются"));
             return;
         }
         let busy = Arc::clone(&self.config_busy);
@@ -4576,7 +4554,7 @@ impl Viewer {
         thread::spawn(move || {
             let text = match work() {
                 Ok(text) => text,
-                Err(err) => format!("Не сохранилось: {err}"),
+                Err(err) => trf!("Не сохранилось: {err}", err = err),
             };
             *status.lock().unwrap() = text;
             busy.store(false, Ordering::Release);
@@ -4594,12 +4572,12 @@ impl Viewer {
             .iter()
             .find(|device| device.id == self.config_device)
             .map(LiveDevice::display_name)
-            .unwrap_or_else(|| "регистратор".into());
+            .unwrap_or_else(|| tr("регистратор").into());
         let screen = ctx.screen_rect();
         let mut accept = false;
         let mut cancel = ctx.input(|input| input.key_pressed(egui::Key::Escape));
         let mut arm = false;
-        egui::Window::new("Подтверждение")
+        egui::Window::new(tr("Подтверждение"))
             .id(egui::Id::new("config-confirm"))
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .collapsible(false)
@@ -4620,9 +4598,9 @@ impl Viewer {
                 if let ConfigConfirm::Format { armed, .. } = confirm {
                     ui.add_space(8.0);
                     if !armed {
-                        ui.label("Дальше нужно вписать имя устройства.");
+                        ui.label(tr("Дальше нужно вписать имя устройства."));
                     } else {
-                        field_label(ui, "Имя устройства");
+                        field_label(ui, tr("Имя устройства"));
                         text_field(ui, &mut self.config_format_name, false, 280.0, "");
                     }
                 }
@@ -4638,13 +4616,13 @@ impl Viewer {
                     };
                     let label = match confirm {
                         ConfigConfirm::Format { armed: false, .. } => {
-                            with_icon(ph::ARROW_RIGHT, "Продолжить")
+                            with_icon(ph::ARROW_RIGHT, tr("Продолжить"))
                         }
                         ConfigConfirm::Format { armed: true, .. } => {
-                            with_icon(ph::TRASH, "Стереть записи")
+                            with_icon(ph::TRASH, tr("Стереть записи"))
                         }
-                        ConfigConfirm::Reboot => with_icon(ph::ARROW_CLOCKWISE, "Перезагрузить"),
-                        _ => with_icon(ph::CHECK, "Сохранить"),
+                        ConfigConfirm::Reboot => with_icon(ph::ARROW_CLOCKWISE, tr("Перезагрузить")),
+                        _ => with_icon(ph::CHECK, tr("Сохранить")),
                     };
                     if ui.add_enabled(ready, egui::Button::new(label)).clicked() {
                         if matches!(confirm, ConfigConfirm::Format { armed: false, .. }) {
@@ -4653,7 +4631,7 @@ impl Viewer {
                             accept = true;
                         }
                     }
-                    if ui.button(with_icon(ph::X, "Отмена")).clicked() {
+                    if ui.button(with_icon(ph::X, tr("Отмена"))).clicked() {
                         cancel = true;
                     }
                 });
@@ -4703,7 +4681,7 @@ impl Viewer {
             let mut session = Session::connect(&device.host, device.port, &device.user, &device.password)
                 .map_err(|err| err.to_string())?;
             session.reboot().map_err(|err| err.to_string())?;
-            Ok("Регистратор перезагружается".into())
+            Ok(tr("Регистратор перезагружается").into())
         });
     }
 
@@ -4724,7 +4702,7 @@ impl Viewer {
             session
                 .format_disk(disk as u32, part as u32)
                 .map_err(|err| err.to_string())?;
-            Ok("Форматирование запущено".into())
+            Ok(tr("Форматирование запущено").into())
         });
     }
 
@@ -4732,17 +4710,62 @@ impl Viewer {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.add_space(24.0);
             ui.set_max_width(640.0);
-            ui.label(accent_label(ui, with_icon(ph::GEAR, "Программа"), 22.0));
+            ui.label(accent_label(ui, with_icon(ph::GEAR, tr("Программа")), 22.0));
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new("Параметры этого клиента. На регистратор не отправляются.")
+                egui::RichText::new(tr("Параметры этого клиента. На регистратор не отправляются."))
                     .color(MUTED),
             );
             ui.add_space(18.0);
-            settings_section(ui, with_icon(ph::BROADCAST, "Поток по умолчанию"), |ui| {
+            settings_section(ui, with_icon(ph::TRANSLATE, tr("Язык")), |ui| {
+                let current = self
+                    .languages
+                    .iter()
+                    .find(|item| item.code == self.language)
+                    .map(|item| item.name.clone())
+                    .unwrap_or_else(|| self.language.clone());
+                let mut chosen = None;
+                ui.horizontal(|ui| {
+                    tune_inputs(ui);
+                    egui::ComboBox::from_id_salt("interface-language")
+                        .selected_text(current)
+                        .width(240.0)
+                        .show_ui(ui, |ui| {
+                            tune_menu(ui);
+                            for item in &self.languages {
+                                if ui.selectable_label(item.code == self.language, &item.name).clicked() {
+                                    chosen = Some(item.code.clone());
+                                }
+                            }
+                        });
+                    if ui.button(with_icon(ph::FOLDER_OPEN, tr("Папка языков"))).clicked() {
+                        let dir = language_dir();
+                        let _ = std::fs::create_dir_all(&dir);
+                        if let Err(err) = open_external(dir.as_os_str()) {
+                            self.set_status(trf!("Не удалось открыть папку: {err}", err = err));
+                        }
+                        self.languages = xm_nvr::i18n::available(&dir);
+                    }
+                });
+                setting_note(
+                    ui,
+                    tr("Свой перевод: скопируйте en.json в папке языков под новым именем, например de.json, переведите в нём значения и поле name, затем выберите язык здесь."),
+                );
+                if let Some(code) = chosen {
+                    match xm_nvr::i18n::activate(&language_dir(), &code) {
+                        Ok(()) => {
+                            self.language = code;
+                            self.set_status(tr("Язык интерфейса изменён"));
+                        }
+                        Err(err) => self.set_status(trf!("Язык не загрузился: {err}", err = err)),
+                    }
+                }
+            });
+            ui.add_space(12.0);
+            settings_section(ui, with_icon(ph::BROADCAST, tr("Поток по умолчанию")), |ui| {
                 ui.label(
                     egui::RichText::new(
-                        "Этим потоком камеры открываются при запуске. Переключатель внизу экрана просмотра меняет поток только до закрытия программы.",
+                        tr("Этим потоком камеры открываются при запуске. Переключатель внизу экрана просмотра меняет поток только до закрытия программы."),
                     )
                     .color(MUTED),
                 );
@@ -4751,32 +4774,32 @@ impl Viewer {
                     .radio_value(
                         &mut self.default_stream,
                         StreamKind::Main,
-                        with_icon(ph::MONITOR, "Основной"),
+                        with_icon(ph::MONITOR, tr("Основной")),
                     )
                     .changed()
                 {
                     self.stream = StreamKind::Main;
                 }
-                setting_note(ui, "Полное разрешение. Больше нагрузка на сеть и процессор.");
+                setting_note(ui, tr("Полное разрешение. Больше нагрузка на сеть и процессор."));
                 ui.add_space(8.0);
                 if ui
                     .radio_value(
                         &mut self.default_stream,
                         StreamKind::Extra,
-                        with_icon(ph::PICTURE_IN_PICTURE, "Дополнительный"),
+                        with_icon(ph::PICTURE_IN_PICTURE, tr("Дополнительный")),
                     )
                     .changed()
                 {
                     self.stream = StreamKind::Extra;
                 }
-                setting_note(ui, "Меньшее разрешение. Удобен, когда на экране много камер.");
+                setting_note(ui, tr("Меньшее разрешение. Удобен, когда на экране много камер."));
             });
-            settings_section(ui, with_icon(ph::CPU, "Декодирование"), |ui| {
+            settings_section(ui, with_icon(ph::CPU, tr("Декодирование")), |ui| {
                 ui.label(
                     egui::RichText::new(if cfg!(windows) {
-                        "Видеокарта распаковывает H.264 и H.265 через D3D11. Кадр всё равно копируется в окно. Если поток не пойдёт, эта камера сама вернётся на процессор. MPEG-4 всегда на процессоре."
+                        tr("Видеокарта распаковывает H.264 и H.265 через D3D11. Кадр всё равно копируется в окно. Если поток не пойдёт, эта камера сама вернётся на процессор. MPEG-4 всегда на процессоре.")
                     } else {
-                        "Видеокарта распаковывает H.264 и H.265 через VA-API, VDPAU или CUDA — что найдёт ffmpeg. Кадр всё равно копируется в окно. Если поток не пойдёт, эта камера сама вернётся на процессор. MPEG-4 всегда на процессоре."
+                        tr("Видеокарта распаковывает H.264 и H.265 через VA-API, VDPAU или CUDA — что найдёт ffmpeg. Кадр всё равно копируется в окно. Если поток не пойдёт, эта камера сама вернётся на процессор. MPEG-4 всегда на процессоре.")
                     })
                     .color(MUTED),
                 );
@@ -4784,31 +4807,31 @@ impl Viewer {
                 if ui
                     .checkbox(
                         &mut self.hwaccel,
-                        with_icon(ph::GRAPHICS_CARD, "Аппаратное ускорение"),
+                        with_icon(ph::GRAPHICS_CARD, tr("Аппаратное ускорение")),
                     )
                     .changed()
                 {
                     self.set_status(if self.hwaccel {
-                        "Декодирование на видеокарте. Потоки перезапускаются."
+                        tr("Декодирование на видеокарте. Потоки перезапускаются.")
                     } else {
-                        "Декодирование на процессоре. Потоки перезапускаются."
+                        tr("Декодирование на процессоре. Потоки перезапускаются.")
                     });
                     if self.page == Page::Live {
                         self.sync_streams();
                     }
                 }
             });
-            settings_section(ui, with_icon(ph::BELL, "Звонок домофона"), |ui| {
+            settings_section(ui, with_icon(ph::BELL, tr("Звонок домофона")), |ui| {
                 ui.label(
                     egui::RichText::new(
-                        "Домофон сообщает, когда нажали кнопку вызова. На экран выводится выбранная камера — удобный ракурс, а не глазок. Замок открывается с панели звонка.",
+                        tr("Домофон сообщает, когда нажали кнопку вызова. На экран выводится выбранная камера — удобный ракурс, а не глазок. Замок открывается с панели звонка."),
                     )
                     .color(MUTED),
                 );
                 ui.add_space(10.0);
                 ui.checkbox(
                     &mut self.door_call,
-                    with_icon(ph::BELL, "Открывать камеру при звонке"),
+                    with_icon(ph::BELL, tr("Открывать камеру при звонке")),
                 );
                 let doors = self
                     .devices
@@ -4819,10 +4842,10 @@ impl Viewer {
                     .count();
                 if doors == 0 {
                     ui.add_space(6.0);
-                    setting_note(ui, "Среди устройств нет подключённого домофона Hikvision.");
+                    setting_note(ui, tr("Среди устройств нет подключённого домофона Hikvision."));
                 }
                 ui.add_space(12.0);
-                field_label(ui, "Камера на экране");
+                field_label(ui, tr("Камера на экране"));
                 let choices = self.camera_choices();
                 let selected = self
                     .door_camera
@@ -4832,12 +4855,12 @@ impl Viewer {
                             .find(|(item, _)| *item == source)
                             .map(|(_, label)| label.clone())
                     })
-                    .unwrap_or_else(|| "Не выбрана".into());
+                    .unwrap_or_else(|| tr("Не выбрана").into());
                 egui::ComboBox::from_id_salt("door-camera")
                     .selected_text(selected)
                     .width(420.0)
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.door_camera, None, "Не выбрана");
+                        ui.selectable_value(&mut self.door_camera, None, tr("Не выбрана"));
                         for (source, label) in &choices {
                             ui.selectable_value(&mut self.door_camera, Some(*source), label);
                         }
@@ -4846,13 +4869,13 @@ impl Viewer {
                     ui.add_space(6.0);
                     setting_note(
                         ui,
-                        "Камера не выбрана: при звонке останется панель, с которой можно открыть замок.",
+                        tr("Камера не выбрана: при звонке останется панель, с которой можно открыть замок."),
                     );
                 }
             });
-            settings_section(ui, "Цвет акцента".into(), |ui| {
+            settings_section(ui, tr("Цвет акцента").into(), |ui| {
                 ui.label(
-                    egui::RichText::new("Кнопки, заголовки разделов и подсветка.")
+                    egui::RichText::new(tr("Кнопки, заголовки разделов и подсветка."))
                         .color(MUTED),
                 );
                 ui.add_space(12.0);
@@ -4957,11 +4980,11 @@ impl Viewer {
             HEADER,
         );
         let titles = [
-            "Отображаемое имя",
-            "Адрес",
-            "Модель",
-            "Протокол",
-            "Статус",
+            tr("Отображаемое имя"),
+            tr("Адрес"),
+            tr("Модель"),
+            tr("Протокол"),
+            tr("Статус"),
         ];
         for (column, title) in device_columns(header).iter().zip(titles) {
             paint_row_text(ui, *column, title, MUTED);
@@ -4973,7 +4996,7 @@ impl Viewer {
                 ui.painter().text(
                     body.center(),
                     egui::Align2::CENTER_CENTER,
-                    "Нет устройств",
+                    tr("Нет устройств"),
                     egui::FontId::proportional(15.0),
                     MUTED,
                 );
@@ -5016,15 +5039,15 @@ impl Viewer {
                         }
                         response.on_hover_text(&status).context_menu(|ui| {
                             tune_menu(ui);
-                            if ui.button(with_icon(ph::LIST_BULLETS, "Подробности")).clicked() {
+                            if ui.button(with_icon(ph::LIST_BULLETS, tr("Подробности"))).clicked() {
                                 self.device_dialog = Some(DeviceDialog::Details(device.id));
                                 ui.close_menu();
                             }
-                            if ui.button(with_icon(ph::PENCIL_SIMPLE, "Редактировать")).clicked() {
+                            if ui.button(with_icon(ph::PENCIL_SIMPLE, tr("Редактировать"))).clicked() {
                                 self.open_device_form(Some(device.id));
                                 ui.close_menu();
                             }
-                            if ui.button(with_icon(ph::TRASH, "Удалить")).clicked() {
+                            if ui.button(with_icon(ph::TRASH, tr("Удалить"))).clicked() {
                                 remove_id = Some(device.id);
                                 ui.close_menu();
                             }
@@ -5083,9 +5106,9 @@ impl Viewer {
             });
         let mut save = false;
         let title = match dialog {
-            DeviceDialog::Add => "Новое устройство",
-            DeviceDialog::Edit(_) => "Изменить устройство",
-            DeviceDialog::Details(_) => "Подробности",
+            DeviceDialog::Add => tr("Новое устройство"),
+            DeviceDialog::Edit(_) => tr("Изменить устройство"),
+            DeviceDialog::Details(_) => tr("Подробности"),
         };
         egui::Window::new(title)
             .id(egui::Id::new("device-popup"))
@@ -5113,7 +5136,7 @@ impl Viewer {
                             device_detail_rows(ui, device);
                         }
                         ui.add_space(12.0);
-                        if ui.button(with_icon(ph::X, "Закрыть")).clicked() {
+                        if ui.button(with_icon(ph::X, tr("Закрыть"))).clicked() {
                             cancel = true;
                         }
                     }
@@ -5122,14 +5145,14 @@ impl Viewer {
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
                             let caption = if matches!(dialog, DeviceDialog::Add) {
-                                with_icon(ph::PLUS, "Добавить")
+                                with_icon(ph::PLUS, tr("Добавить"))
                             } else {
-                                with_icon(ph::CHECK, "Сохранить")
+                                with_icon(ph::CHECK, tr("Сохранить"))
                             };
                             if ui.add_sized([168.0, 34.0], egui::Button::new(caption)).clicked() {
                                 save = true;
                             }
-                            if ui.button(with_icon(ph::X, "Отмена")).clicked() {
+                            if ui.button(with_icon(ph::X, tr("Отмена"))).clicked() {
                                 cancel = true;
                             }
                         });
@@ -5155,10 +5178,10 @@ impl Viewer {
     fn device_form(&mut self, ui: &mut egui::Ui) {
         tune_inputs(ui);
         let width = 420.0;
-        field_label(ui, "Отображаемое имя");
+        field_label(ui, tr("Отображаемое имя"));
         text_field(ui, &mut self.draft_name, false, width, "");
         ui.add_space(14.0);
-        field_label(ui, "Протокол");
+        field_label(ui, tr("Протокол"));
         let mut kind = self.draft_kind;
         egui::ComboBox::from_id_salt("device-kind")
             .selected_text(vendor_name(kind))
@@ -5171,22 +5194,22 @@ impl Viewer {
             self.set_draft_kind(kind);
         }
         ui.add_space(14.0);
-        field_label(ui, "Адрес");
+        field_label(ui, tr("Адрес"));
         text_field(ui, &mut self.host, false, width, "");
         ui.add_space(14.0);
-        field_label(ui, "Порт");
+        field_label(ui, tr("Порт"));
         text_field(ui, &mut self.port, false, width, "");
         ui.add_space(6.0);
         let hint = match self.draft_kind {
-            Vendor::Xm => "Стандартный порт Xiongmai — 34567",
-            Vendor::Hikvision => "Стандартный порт Hikvision — 80. Видео идёт по RTSP, порт 554.",
+            Vendor::Xm => tr("Стандартный порт Xiongmai — 34567"),
+            Vendor::Hikvision => tr("Стандартный порт Hikvision — 80. Видео идёт по RTSP, порт 554."),
         };
         ui.label(egui::RichText::new(hint).color(MUTED).size(12.0));
         ui.add_space(14.0);
-        field_label(ui, "Пользователь");
+        field_label(ui, tr("Пользователь"));
         text_field(ui, &mut self.user, false, width, "");
         ui.add_space(14.0);
-        field_label(ui, "Пароль");
+        field_label(ui, tr("Пароль"));
         text_field(ui, &mut self.password, true, width, "");
     }
 
@@ -5203,11 +5226,11 @@ impl Viewer {
             .show(ui, |ui| {
                 if !device.connected && !device.error.is_empty() {
                     ui.label(egui::RichText::new(&device.error).color(MUTED));
-                    if ui.button(with_icon(ph::ARROW_CLOCKWISE, "Повторить")).clicked() {
+                    if ui.button(with_icon(ph::ARROW_CLOCKWISE, tr("Повторить"))).clicked() {
                         self.probe(device.id);
                     }
                 } else if count == 0 {
-                    ui.label(egui::RichText::new("Каналы ещё не получены").color(MUTED));
+                    ui.label(egui::RichText::new(tr("Каналы ещё не получены")).color(MUTED));
                 }
                 let selected = self
                     .cells
@@ -5243,12 +5266,9 @@ impl Viewer {
                             MUTED
                         });
                         let hint = if archive {
-                            format!("{}\nПоказать записи за выбранный день", link_hint(status))
+                            trf!("{status}\nПоказать записи за выбранный день", status = link_hint(status))
                         } else {
-                            format!(
-                                "{}\nОдин клик — перейти к окну, двойной — открыть в текущем\nПравая кнопка — переименовать",
-                                list_hint(status, placed)
-                            )
+                            trf!("{value}\nОдин клик — перейти к окну, двойной — открыть в текущем\nПравая кнопка — переименовать", value = list_hint(status, placed))
                         };
                         let row = ui
                             .scope(|ui| {
@@ -5279,7 +5299,7 @@ impl Viewer {
                         let device_id = device.id;
                         row.context_menu(|ui| {
                             tune_menu(ui);
-                            if ui.button(with_icon(ph::PENCIL_SIMPLE, "Переименовать")).clicked() {
+                            if ui.button(with_icon(ph::PENCIL_SIMPLE, tr("Переименовать"))).clicked() {
                                 self.open_rename(device_id, channel, current.clone());
                                 ui.close_menu();
                             }
@@ -5348,7 +5368,7 @@ impl Viewer {
             polish_toolbar(ui);
             if ui
                 .button(ph::ARROW_LEFT)
-                .on_hover_text("Сдвинуть период на сутки назад")
+                .on_hover_text(tr("Сдвинуть период на сутки назад"))
                 .clicked()
             {
                 self.step_range(-1);
@@ -5356,14 +5376,14 @@ impl Viewer {
             let label = format_range_label(&self.archive_from, &self.archive_to);
             if ui
                 .button(with_icon(ph::CALENDAR_BLANK, &label))
-                .on_hover_text("Выбрать дату и время")
+                .on_hover_text(tr("Выбрать дату и время"))
                 .clicked()
             {
                 self.open_archive_picker();
             }
             if ui
                 .button(ph::ARROW_RIGHT)
-                .on_hover_text("Сдвинуть период на сутки вперёд")
+                .on_hover_text(tr("Сдвинуть период на сутки вперёд"))
                 .clicked()
             {
                 self.step_range(1);
@@ -5371,38 +5391,38 @@ impl Viewer {
             let today = today_day();
             let full_today = self.archive_from == format!("{today} 00:00:00")
                 && self.archive_to == format!("{today} 23:59:59");
-            if !full_today && ui.button("Сегодня").clicked() {
+            if !full_today && ui.button(tr("Сегодня")).clicked() {
                 self.jump_today();
             }
             ui.add_space(8.0);
-            if ui.button(with_icon(ph::MAGNIFYING_GLASS, "Найти")).clicked() {
+            if ui.button(with_icon(ph::MAGNIFYING_GLASS, tr("Найти"))).clicked() {
                 self.search();
             }
             if ui
                 .button(ph::SKIP_BACK)
-                .on_hover_text("Предыдущий файл")
+                .on_hover_text(tr("Предыдущий файл"))
                 .clicked()
             {
                 self.play_neighbor(recordings, -1);
             }
-            if ui.button(ph::PLAY).on_hover_text("Смотреть фрагмент").clicked() {
+            if ui.button(ph::PLAY).on_hover_text(tr("Смотреть фрагмент")).clicked() {
                 let at = self
                     .archive_clock()
                     .or_else(|| stamp_epoch(&self.archive_from))
                     .unwrap_or(0);
                 self.play_at(at, recordings);
             }
-            if ui.button(ph::STOP).on_hover_text("Остановить").clicked() {
+            if ui.button(ph::STOP).on_hover_text(tr("Остановить")).clicked() {
                 self.archive.stop();
                 self.archive_seen = 0;
                 self.archive_texture = None;
                 self.archive_playing = None;
                 self.seek_preview = None;
-                self.set_status("Воспроизведение остановлено");
+                self.set_status(tr("Воспроизведение остановлено"));
             }
             if ui
                 .button(ph::SKIP_FORWARD)
-                .on_hover_text("Следующий файл")
+                .on_hover_text(tr("Следующий файл"))
                 .clicked()
             {
                 self.play_neighbor(recordings, 1);
@@ -5416,7 +5436,7 @@ impl Viewer {
                     }
                 })
                 .response
-                .on_hover_text("Скорость воспроизведения");
+                .on_hover_text(tr("Скорость воспроизведения"));
             if let Some(at) = self.archive_clock() {
                 ui.add_space(8.0);
                 ui.label(accent_label(
@@ -5428,16 +5448,16 @@ impl Viewer {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(12.0);
                 if ui
-                    .button(with_icon(ph::FOLDER_OPEN, "Показать файлы"))
-                    .on_hover_text("Открыть папку с сохранёнными файлами")
+                    .button(with_icon(ph::FOLDER_OPEN, tr("Показать файлы")))
+                    .on_hover_text(tr("Открыть папку с сохранёнными файлами"))
                     .clicked()
                 {
                     self.reveal_downloads();
                 }
                 if self.download_busy.load(Ordering::Acquire)
                     && ui
-                        .button(with_icon(ph::X, "Отмена"))
-                        .on_hover_text("Остановить скачивание")
+                        .button(with_icon(ph::X, tr("Отмена")))
+                        .on_hover_text(tr("Остановить скачивание"))
                         .clicked()
                 {
                     self.cancel_download();
@@ -5465,7 +5485,7 @@ impl Viewer {
                 if recordings.is_empty() {
                     ui.add_space(8.0);
                     ui.label(
-                        egui::RichText::new("За выбранный период записей нет").color(MUTED),
+                        egui::RichText::new(tr("За выбранный период записей нет")).color(MUTED),
                     );
                     return;
                 }
@@ -5483,14 +5503,14 @@ impl Viewer {
                             ui.label(egui::RichText::new(caption).color(ui_accent(ui)));
                             if ui
                                 .button(ph::X)
-                                .on_hover_text("Остановить скачивание")
+                                .on_hover_text(tr("Остановить скачивание"))
                                 .clicked()
                             {
                                 self.cancel_download();
                             }
                         } else if ui
                             .add_enabled(!busy, egui::Button::new(ph::DOWNLOAD_SIMPLE))
-                            .on_hover_text("Скачать фрагмент")
+                            .on_hover_text(tr("Скачать фрагмент"))
                             .clicked()
                         {
                             self.open_download(recording.clone());
@@ -5515,7 +5535,7 @@ impl Viewer {
                                 egui::Button::new(egui::RichText::new(label).color(color))
                                     .frame(false),
                             )
-                            .on_hover_text("Смотреть")
+                            .on_hover_text(tr("Смотреть"))
                             .clicked()
                         {
                             self.play(recording.clone());
@@ -5543,7 +5563,7 @@ impl Viewer {
             let device = devices.iter().find(|item| item.id == self.archive_device);
             device
                 .map(|item| channel_title(Some(item), self.archive_channel))
-                .unwrap_or_else(|| "Камера".into())
+                .unwrap_or_else(|| tr("Камера").into())
         };
         paint_row_text(ui, label, &camera, TEXT);
         let Some(start) = stamp_epoch(&self.archive_from) else {
@@ -5697,7 +5717,7 @@ impl Viewer {
             });
         let mut apply = false;
         let mut picked_day = None;
-        egui::Window::new("Период")
+        egui::Window::new(tr("Период"))
             .id(egui::Id::new("archive-picker"))
             .title_bar(false)
             .resizable(false)
@@ -5716,21 +5736,21 @@ impl Viewer {
             .show(ctx, |ui| {
                 ui.set_min_width(372.0);
                 ui.horizontal(|ui| {
-                    ui.label(accent_label(ui, "Период", 18.0));
+                    ui.label(accent_label(ui, tr("Период"), 18.0));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("до 2 суток").size(13.0).color(MUTED));
+                        ui.label(egui::RichText::new(tr("до 2 суток")).size(13.0).color(MUTED));
                     });
                 });
                 ui.add_space(14.0);
                 let card_width = (ui.available_width() - 8.0) / 2.0;
                 ui.horizontal(|ui| {
-                    if endpoint_card(ui, "С", &self.picker_from, self.picker_editing_from, card_width)
+                    if endpoint_card(ui, tr("С"), &self.picker_from, self.picker_editing_from, card_width)
                     {
                         self.picker_editing_from = true;
                         self.reveal_stamp(&self.picker_from.clone());
                         self.sync_time_fields();
                     }
-                    if endpoint_card(ui, "До", &self.picker_to, !self.picker_editing_from, card_width)
+                    if endpoint_card(ui, tr("До"), &self.picker_to, !self.picker_editing_from, card_width)
                     {
                         self.picker_editing_from = false;
                         self.reveal_stamp(&self.picker_to.clone());
@@ -5755,14 +5775,14 @@ impl Viewer {
                         ui.visuals_mut().widgets.hovered.bg_fill = accent;
                         ui.visuals_mut().widgets.active.fg_stroke.color = ink;
                         if ui
-                            .add_sized([width, 36.0], egui::Button::new("Найти").fill(accent))
+                            .add_sized([width, 36.0], egui::Button::new(tr("Найти")).fill(accent))
                             .clicked()
                         {
                             apply = true;
                         }
                     });
                     if ui
-                        .add_sized([width, 36.0], egui::Button::new("Отмена"))
+                        .add_sized([width, 36.0], egui::Button::new(tr("Отмена")))
                         .clicked()
                     {
                         cancel = true;
@@ -5968,7 +5988,7 @@ impl Viewer {
         let band = tint(TILE, accent, 42);
         let ink = accent_ink(accent);
         let today = stamp_epoch(&format!("{} 12:00:00", today_day())).map(|value| value.div_euclid(86400));
-        for (col, name) in ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].iter().enumerate() {
+        for (col, name) in [tr("Пн"), tr("Вт"), tr("Ср"), tr("Чт"), tr("Пт"), tr("Сб"), tr("Вс")].iter().enumerate() {
             ui.painter().text(
                 egui::pos2(rect.left() + (col as f32 + 0.5) * cell_w, rect.top() + 10.0),
                 egui::Align2::CENTER_CENTER,
@@ -6034,9 +6054,9 @@ impl Viewer {
 
     fn picker_time(&mut self, ui: &mut egui::Ui) {
         let caption = if self.picker_editing_from {
-            "Время начала"
+            tr("Время начала")
         } else {
-            "Время конца"
+            tr("Время конца")
         };
         ui.label(egui::RichText::new(caption).size(13.0).color(MUTED));
         ui.add_space(6.0);
@@ -6121,7 +6141,7 @@ impl Viewer {
                 }
             });
         let mut confirm = false;
-        egui::Window::new("Скачать")
+        egui::Window::new(tr("Скачать"))
             .id(egui::Id::new("download-popup"))
             .title_bar(false)
             .resizable(false)
@@ -6139,7 +6159,7 @@ impl Viewer {
             )
             .show(ctx, |ui| {
                 ui.set_min_width(420.0);
-                ui.label(accent_label(ui, "Скачать фрагмент", 18.0));
+                ui.label(accent_label(ui, tr("Скачать фрагмент"), 18.0));
                 ui.add_space(4.0);
                 let file_span = stamp_epoch(&draft.file_end)
                     .zip(stamp_epoch(&draft.file_begin))
@@ -6155,10 +6175,10 @@ impl Viewer {
                     .color(MUTED),
                 );
                 ui.add_space(14.0);
-                field_label(ui, "Начало");
+                field_label(ui, tr("Начало"));
                 let begin_edit = slice_time_row(ui, &mut draft.begin);
                 ui.add_space(10.0);
-                field_label(ui, "Конец");
+                field_label(ui, tr("Конец"));
                 let end_edit = slice_time_row(ui, &mut draft.end);
                 if let Some(delta) = begin_edit.step {
                     let current = draft.begin.clone();
@@ -6178,16 +6198,12 @@ impl Viewer {
                 let (begin, end) = resolved_slice(&draft);
                 let seconds = (end - begin).max(0);
                 ui.label(
-                    egui::RichText::new(format!(
-                        "К скачиванию: {} · {}",
-                        format_clip(&epoch_stamp(begin), &epoch_stamp(end)),
-                        format_span(seconds)
-                    ))
+                    egui::RichText::new(trf!("К скачиванию: {value} · {seconds}", value = format_clip(&epoch_stamp(begin), &epoch_stamp(end)), seconds = format_span(seconds)))
                     .color(TEXT),
                 );
                 ui.add_space(12.0);
-                ui.checkbox(&mut self.download_mp4, "Сконвертировать в MP4")
-                    .on_hover_text("Картинка копируется как есть, без перекодирования. Если в записи есть звук, он укладывается в AAC, чтобы файл открывался в обычных плеерах.");
+                ui.checkbox(&mut self.download_mp4, tr("Сконвертировать в MP4"))
+                    .on_hover_text(tr("Картинка копируется как есть, без перекодирования. Если в записи есть звук, он укладывается в AAC, чтобы файл открывался в обычных плеерах."));
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
                     let width = (ui.available_width() - 8.0) / 2.0;
@@ -6200,14 +6216,14 @@ impl Viewer {
                         ui.visuals_mut().widgets.hovered.bg_fill = accent;
                         ui.visuals_mut().widgets.active.fg_stroke.color = ink;
                         if ui
-                            .add_sized([width, 36.0], egui::Button::new("Скачать").fill(accent))
+                            .add_sized([width, 36.0], egui::Button::new(tr("Скачать")).fill(accent))
                             .clicked()
                         {
                             confirm = true;
                         }
                     });
                     if ui
-                        .add_sized([width, 36.0], egui::Button::new("Отмена"))
+                        .add_sized([width, 36.0], egui::Button::new(tr("Отмена")))
                         .clicked()
                     {
                         cancel = true;
@@ -6286,7 +6302,7 @@ impl Viewer {
                         camera
                     }
                 })
-                .unwrap_or_else(|| "Архив".into());
+                .unwrap_or_else(|| tr("Архив").into());
             if let Some(at) = self.archive_clock() {
                 title = format!("{title} · {}", format_mark(at, &self.archive_from));
             }
@@ -6323,11 +6339,11 @@ impl Viewer {
             );
         } else {
             let message = if devices.is_empty() {
-                "Добавьте регистратор"
+                tr("Добавьте регистратор")
             } else if _recordings.is_empty() {
-                "За выбранный период записей нет"
+                tr("За выбранный период записей нет")
             } else {
-                "Выберите файл справа или нажмите на шкалу"
+                tr("Выберите файл справа или нажмите на шкалу")
             };
             ui.painter().text(
                 video.center(),
@@ -6343,9 +6359,9 @@ impl Viewer {
                 .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!bare));
         }
         stage.on_hover_text(if bare {
-            "Двойной щелчок или Esc — обычный размер"
+            tr("Двойной щелчок или Esc — обычный размер")
         } else {
-            "Двойной щелчок — на весь экран"
+            tr("Двойной щелчок — на весь экран")
         });
         if let Some(strip) = scrubber {
             self.paint_scrubber(ui, strip, bare);
@@ -6464,7 +6480,7 @@ impl Viewer {
                     track.y_range(),
                     egui::Stroke::new(1.0, MUTED),
                 );
-                response.on_hover_text(format!("Перемотать на {}", format_mark(hover_at, &clip.begin)));
+                response.on_hover_text(trf!("Перемотать на {value}", value = format_mark(hover_at, &clip.begin)));
             }
         }
     }
@@ -6473,11 +6489,11 @@ impl Viewer {
         egui::Frame::new()
             .inner_margin(egui::Margin::same(22))
             .show(ui, |ui| {
-                ui.label(accent_label(ui, with_icon(ph::CLIPBOARD_TEXT, "Журнал"), 22.0));
+                ui.label(accent_label(ui, with_icon(ph::CLIPBOARD_TEXT, tr("Журнал")), 22.0));
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(
-                        "События из журнала регистратора: тревоги камер, запись, диск и система.",
+                        tr("События из журнала регистратора: тревоги камер, запись, диск и система."),
                     )
                     .color(MUTED),
                 );
@@ -6486,7 +6502,7 @@ impl Viewer {
                     polish_toolbar(ui);
                     if ui
                         .button(ph::ARROW_LEFT)
-                        .on_hover_text("Сутки назад")
+                        .on_hover_text(tr("Сутки назад"))
                         .clicked()
                     {
                         self.step_journal(-1);
@@ -6494,14 +6510,14 @@ impl Viewer {
                     let label = format_range_label(&self.journal_from, &self.journal_to);
                     if ui
                         .button(with_icon(ph::CALENDAR_BLANK, &label))
-                        .on_hover_text("Выбрать дату и время")
+                        .on_hover_text(tr("Выбрать дату и время"))
                         .clicked()
                     {
                         self.open_journal_picker();
                     }
                     if ui
                         .button(ph::ARROW_RIGHT)
-                        .on_hover_text("Сутки вперёд")
+                        .on_hover_text(tr("Сутки вперёд"))
                         .clicked()
                     {
                         self.step_journal(1);
@@ -6509,12 +6525,12 @@ impl Viewer {
                     let today = today_day();
                     let full_today = self.journal_from == format!("{today} 00:00:00")
                         && self.journal_to == format!("{today} 23:59:59");
-                    if !full_today && ui.button("Сегодня").clicked() {
+                    if !full_today && ui.button(tr("Сегодня")).clicked() {
                         self.journal_from = format!("{today} 00:00:00");
                         self.journal_to = format!("{today} 23:59:59");
                         self.search_journal();
                     }
-                    if ui.button(with_icon(ph::MAGNIFYING_GLASS, "Найти")).clicked() {
+                    if ui.button(with_icon(ph::MAGNIFYING_GLASS, tr("Найти"))).clicked() {
                         self.search_journal();
                     }
                     ui.add_space(8.0);
@@ -6538,14 +6554,14 @@ impl Viewer {
                     .filter(|row| journal_row_visible(row, self.journal_filter))
                     .collect();
                 if self.journal_busy.load(Ordering::Acquire) && rows.is_empty() {
-                    ui.label(egui::RichText::new("Читаю журнал регистраторов…").color(MUTED));
+                    ui.label(egui::RichText::new(tr("Читаю журнал регистраторов…")).color(MUTED));
                     return;
                 }
                 if shown.is_empty() {
                     let text = if rows.is_empty() {
-                        "За выбранный период событий нет"
+                        tr("За выбранный период событий нет")
                     } else {
-                        "Таких событий нет. В списке выше можно показать все записи журнала."
+                        tr("Таких событий нет. В списке выше можно показать все записи журнала.")
                     };
                     ui.label(egui::RichText::new(text).color(MUTED));
                     return;
@@ -6589,7 +6605,7 @@ impl Viewer {
         ui.set_max_width(640.0);
         ui.label(egui::RichText::new(text).color(MUTED));
         ui.add_space(16.0);
-        if ui.button(with_icon(ph::HOUSE, "На главную")).clicked() {
+        if ui.button(with_icon(ph::HOUSE, tr("На главную"))).clicked() {
             self.set_page(Page::Home);
         }
     }
@@ -6606,7 +6622,7 @@ fn read_config_bundle(device: &LiveDevice) -> config::ConfigBundle {
     };
     match session.channel_titles() {
         Ok(titles) => bundle.titles = titles,
-        Err(err) if !unsupported(&err) => bundle.note = format!("имена каналов: {err}"),
+        Err(err) if !unsupported(&err) => bundle.note = trf!("имена каналов: {err}", err = err),
         Err(_) => {}
     }
     let mut notes = Vec::new();
@@ -6651,17 +6667,17 @@ fn read_config_bundle(device: &LiveDevice) -> config::ConfigBundle {
             bundle.time_at = Some(std::time::Instant::now());
             bundle.time = time;
         }
-        Err(err) if !unsupported(&err) => notes.push(format!("время: {err}")),
+        Err(err) if !unsupported(&err) => notes.push(trf!("время: {err}", err = err)),
         Err(_) => {}
     }
     match session.users() {
         Ok(users) => bundle.users = users,
-        Err(err) if !unsupported(&err) => notes.push(format!("пользователи: {err}")),
+        Err(err) if !unsupported(&err) => notes.push(trf!("пользователи: {err}", err = err)),
         Err(_) => {}
     }
     match session.system_query("StorageInfo") {
         Ok(storage) => bundle.storage = storage,
-        Err(err) if !unsupported(&err) => notes.push(format!("диск: {err}")),
+        Err(err) if !unsupported(&err) => notes.push(trf!("диск: {err}", err = err)),
         Err(_) => {}
     }
     if let Some(net) = bundle.values.get("NetWork.NetCommon") {
@@ -6731,7 +6747,7 @@ fn apply_config(
                     live.titles = bundle.titles.clone();
                 }
             }
-            Ok("Имена каналов записаны".into())
+            Ok(tr("Имена каналов записаны").into())
         }
         config::ConfigSection::Detect => {
             store_keys(
@@ -6739,11 +6755,11 @@ fn apply_config(
                 bundle,
                 &["Detect.MotionDetect", "Detect.BlindDetect", "Detect.LossDetect"],
             )?;
-            Ok("Детекция записана".into())
+            Ok(tr("Детекция записана").into())
         }
         config::ConfigSection::Record => {
             store_keys(&mut session, bundle, &["Record"])?;
-            Ok("Расписание записано".into())
+            Ok(tr("Расписание записано").into())
         }
         config::ConfigSection::General => {
             store_keys(
@@ -6756,7 +6772,7 @@ fn apply_config(
                     .set_time(&running_clock(clock))
                     .map_err(|err| err.to_string())?;
             }
-            Ok("Общие настройки записаны".into())
+            Ok(tr("Общие настройки записаны").into())
         }
         config::ConfigSection::Picture => {
             store_keys(&mut session, bundle, &["AVEnc.VideoWidget"])?;
@@ -6767,7 +6783,7 @@ fn apply_config(
                         .map_err(|err| err.to_string())?;
                 }
             }
-            Ok("Картинка записана".into())
+            Ok(tr("Картинка записана").into())
         }
         config::ConfigSection::Network => {
             let mut values = bundle.values.clone();
@@ -6785,22 +6801,22 @@ fn apply_config(
                     session.config_set(name, value).map_err(|err| err.to_string())?;
                 }
             }
-            Ok("Сеть записана. Если адрес сменился, откройте регистратор заново.".into())
+            Ok(tr("Сеть записана. Если адрес сменился, откройте регистратор заново.").into())
         }
         config::ConfigSection::Users => {
             let mut users = bundle.users.clone();
             if !password.is_empty() {
                 let hash = sofia_hash(password);
                 let Some(user) = users.as_array_mut().and_then(|items| items.get_mut(user_index)) else {
-                    return Err("пользователь не выбран".into());
+                    return Err(tr("пользователь не выбран").into());
                 };
                 config::set_object_string(user, "Password", hash);
             }
             session.set_users(&users).map_err(|err| err.to_string())?;
-            Ok("Пользователи записаны".into())
+            Ok(tr("Пользователи записаны").into())
         }
         config::ConfigSection::Disk | config::ConfigSection::Maintain => {
-            Err("для этого раздела нет общей записи".into())
+            Err(tr("для этого раздела нет общей записи").into())
         }
     }
 }
@@ -6816,7 +6832,7 @@ fn store_keys(session: &mut Session, bundle: &config::ConfigBundle, names: &[&st
 
 fn write_ip(value: &mut serde_json::Value, key: &str, text: &str) -> Result<(), String> {
     let Some(hex) = config::ip_to_hex(text) else {
-        return Err(format!("адрес {text} не разобран"));
+        return Err(trf!("адрес {text} не разобран", text = text));
     };
     config::set_object_string(value, key, hex);
     Ok(())
@@ -6831,11 +6847,11 @@ fn config_encode_block(ui: &mut egui::Ui, item: &mut serde_json::Value, key: &st
     };
     ui.label(accent_label(ui, title, 15.0));
     ui.add_space(6.0);
-    labeled_config_text(ui, video, "Compression", "Кодек", 140.0);
-    labeled_config_text(ui, video, "Resolution", "Разрешение", 140.0);
-    config_int_row(ui, video, "FPS", "Кадры", 1, 30);
-    config_int_row(ui, video, "BitRate", "Битрейт", 32, 20_000);
-    labeled_config_text(ui, video, "BitRateControl", "Тип", 80.0);
+    labeled_config_text(ui, video, "Compression", tr("Кодек"), 140.0);
+    labeled_config_text(ui, video, "Resolution", tr("Разрешение"), 140.0);
+    config_int_row(ui, video, "FPS", tr("Кадры"), 1, 30);
+    config_int_row(ui, video, "BitRate", tr("Битрейт"), 32, 20_000);
+    labeled_config_text(ui, video, "BitRateControl", tr("Тип"), 80.0);
     ui.add_space(8.0);
 }
 
@@ -6858,26 +6874,26 @@ fn config_detect_block(
     ui.label(accent_label(ui, title, 15.0));
     ui.add_space(6.0);
     let mut enable = config::object_bool(item, "Enable");
-    if ui.checkbox(&mut enable, "Включено").changed() {
+    if ui.checkbox(&mut enable, tr("Включено")).changed() {
         config::set_object_bool(item, "Enable", enable);
     }
     if item.get("Level").is_some() {
-        config_int_row(ui, item, "Level", "Чувствительность", 1, 6);
+        config_int_row(ui, item, "Level", tr("Чувствительность"), 1, 6);
     }
     if let Some(handler) = item.get_mut("EventHandler") {
         let mut record = config::object_bool(handler, "RecordEnable");
         let mut log = config::object_bool(handler, "LogEnable");
-        if ui.checkbox(&mut record, "Писать видео").changed() {
+        if ui.checkbox(&mut record, tr("Писать видео")).changed() {
             config::set_object_bool(handler, "RecordEnable", record);
         }
-        if ui.checkbox(&mut log, "Писать в журнал").changed() {
+        if ui.checkbox(&mut log, tr("Писать в журнал")).changed() {
             config::set_object_bool(handler, "LogEnable", log);
         }
     }
     if region {
         if let Some(grid) = item.get_mut("Region") {
             ui.add_space(6.0);
-            ui.label(egui::RichText::new("Область. Клетка включает зону.").color(MUTED));
+            ui.label(egui::RichText::new(tr("Область. Клетка включает зону.")).color(MUTED));
             paint_region(ui, grid);
         }
     }
@@ -6930,10 +6946,10 @@ fn blend_pair(ui: &mut egui::Ui, widget: &mut serde_json::Value, key: &str, titl
     ui.label(title);
     let mut preview = config::object_bool(attr, "PreviewBlend");
     let mut encode = config::object_bool(attr, "EncodeBlend");
-    if ui.checkbox(&mut preview, "В просмотре").changed() {
+    if ui.checkbox(&mut preview, tr("В просмотре")).changed() {
         config::set_object_bool(attr, "PreviewBlend", preview);
     }
-    if ui.checkbox(&mut encode, "В записи").changed() {
+    if ui.checkbox(&mut encode, tr("В записи")).changed() {
         config::set_object_bool(attr, "EncodeBlend", encode);
     }
 }
@@ -6999,7 +7015,7 @@ fn config_choice(
     value: &mut serde_json::Value,
     key: &str,
     label: &str,
-    options: &[(&str, &str)],
+    options: &[(&str, &'static str)],
 ) {
     if value.get(key).is_none() {
         return;
@@ -7009,7 +7025,7 @@ fn config_choice(
     let selected = options
         .iter()
         .find(|(token, _)| *token == current)
-        .map(|(_, name)| (*name).to_string())
+        .map(|(_, name)| tr(name).to_string())
         .unwrap_or_else(|| current.clone());
     ui.horizontal(|ui| {
         tune_inputs(ui);
@@ -7024,7 +7040,7 @@ fn config_choice(
                     ui.selectable_value(&mut current, extra.clone(), extra);
                 }
                 for (token, name) in options {
-                    ui.selectable_value(&mut current, (*token).to_string(), *name);
+                    ui.selectable_value(&mut current, (*token).to_string(), tr(name));
                 }
             });
     });
@@ -7102,11 +7118,11 @@ fn config_timezone(ui: &mut egui::Ui, zone: &mut serde_json::Value) {
     let selected = XM_TIMEZONES
         .iter()
         .find(|(value, _)| *value == bias)
-        .map(|(_, name)| (*name).to_string())
+        .map(|(_, name)| tr(name).to_string())
         .unwrap_or_else(|| bias_label(bias));
     ui.horizontal(|ui| {
         tune_inputs(ui);
-        ui.label("Часовой пояс");
+        ui.label(tr("Часовой пояс"));
         let width = (ui.available_width() - 4.0).clamp(240.0, 460.0);
         egui::ComboBox::from_id_salt("config-timezone")
             .selected_text(selected)
@@ -7118,7 +7134,7 @@ fn config_timezone(ui: &mut egui::Ui, zone: &mut serde_json::Value) {
                     ui.selectable_value(&mut bias, extra, bias_label(extra));
                 }
                 for (value, name) in XM_TIMEZONES {
-                    ui.selectable_value(&mut bias, *value, *name);
+                    ui.selectable_value(&mut bias, *value, tr(name));
                 }
             });
     });
@@ -7148,41 +7164,41 @@ fn config_int_row(ui: &mut egui::Ui, value: &mut serde_json::Value, key: &str, l
 
 fn record_mode_label(mode: &str) -> &'static str {
     match mode {
-        "ConfigRecord" => "По расписанию",
-        "ManualRecord" => "Вручную",
-        "ClosedRecord" => "Выключена",
-        _ => "Как в регистраторе",
+        "ConfigRecord" => tr("По расписанию"),
+        "ManualRecord" => tr("Вручную"),
+        "ClosedRecord" => tr("Выключена"),
+        _ => tr("Как в регистраторе"),
     }
 }
 
 fn overwrite_label(mode: &str) -> &'static str {
     match mode {
-        "OverWrite" => "Перезаписывать",
-        "StopRecord" => "Остановить запись",
-        _ => "Как в регистраторе",
+        "OverWrite" => tr("Перезаписывать"),
+        "StopRecord" => tr("Остановить запись"),
+        _ => tr("Как в регистраторе"),
     }
 }
 
 fn confirm_title(confirm: ConfigConfirm) -> &'static str {
     match confirm {
-        ConfigConfirm::Network => "Записать сеть",
-        ConfigConfirm::Users => "Записать пользователей",
-        ConfigConfirm::Reboot => "Перезагрузка",
-        ConfigConfirm::Format { .. } => "Форматирование",
+        ConfigConfirm::Network => tr("Записать сеть"),
+        ConfigConfirm::Users => tr("Записать пользователей"),
+        ConfigConfirm::Reboot => tr("Перезагрузка"),
+        ConfigConfirm::Format { .. } => tr("Форматирование"),
     }
 }
 
 fn confirm_text(confirm: ConfigConfirm, device: &str) -> String {
     match confirm {
         ConfigConfirm::Network => {
-            "Регистратор может пропасть из программы, если изменятся адрес или порт.".into()
+            tr("Регистратор может пропасть из программы, если изменятся адрес или порт.").into()
         }
         ConfigConfirm::Users => {
-            "Пароль будет заменён на регистраторе. Пустое поле оставляет текущий.".into()
+            tr("Пароль будет заменён на регистраторе. Пустое поле оставляет текущий.").into()
         }
-        ConfigConfirm::Reboot => format!("{device} перезагрузится и на время пропадёт из просмотра."),
+        ConfigConfirm::Reboot => trf!("{device} перезагрузится и на время пропадёт из просмотра.", device = device),
         ConfigConfirm::Format { .. } => {
-            format!("Записи на разделе {device} будут стёрты. Это нельзя отменить.")
+            trf!("Записи на разделе {device} будут стёрты. Это нельзя отменить.", device = device)
         }
     }
 }
@@ -7223,18 +7239,18 @@ fn format_day(day: &str) -> String {
         return day.to_string();
     };
     let name = [
-        "января",
-        "февраля",
-        "марта",
-        "апреля",
-        "мая",
-        "июня",
-        "июля",
-        "августа",
-        "сентября",
-        "октября",
-        "ноября",
-        "декабря",
+        tr("января"),
+        tr("февраля"),
+        tr("марта"),
+        tr("апреля"),
+        tr("мая"),
+        tr("июня"),
+        tr("июля"),
+        tr("августа"),
+        tr("сентября"),
+        tr("октября"),
+        tr("ноября"),
+        tr("декабря"),
     ]
     .get(month.wrapping_sub(1))
     .copied()
@@ -7298,7 +7314,7 @@ fn wall_epoch(time: WallTime) -> i64 {
 
 fn prepare_range(from: &str, to: &str) -> Result<(String, String), &'static str> {
     let (Some(mut start), Some(mut end)) = (stamp_epoch(from), stamp_epoch(to)) else {
-        return Err("Укажите дату и время");
+        return Err(tr("Укажите дату и время"));
     };
     if end < start {
         std::mem::swap(&mut start, &mut end);
@@ -7347,7 +7363,7 @@ fn format_range_label(from: &str, to: &str) -> String {
             .and_then(|text| text.parse::<usize>().ok())
             .unwrap_or(1);
         let name = [
-            "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек",
+            tr("янв"), tr("фев"), tr("мар"), tr("апр"), tr("мая"), tr("июн"), tr("июл"), tr("авг"), tr("сен"), tr("окт"), tr("ноя"), tr("дек"),
         ]
         .get(month.wrapping_sub(1))
         .copied()
@@ -7385,14 +7401,14 @@ fn slice_time_row(ui: &mut egui::Ui, value: &mut String) -> SliceEdit {
         lost_focus = response.lost_focus();
         if ui
             .add_sized([32.0, 36.0], egui::Button::new(ph::MINUS))
-            .on_hover_text("На секунду раньше")
+            .on_hover_text(tr("На секунду раньше"))
             .clicked()
         {
             step = Some(-1);
         }
         if ui
             .add_sized([32.0, 36.0], egui::Button::new(ph::PLUS))
-            .on_hover_text("На секунду позже")
+            .on_hover_text(tr("На секунду позже"))
             .clicked()
         {
             step = Some(1);
@@ -7506,9 +7522,9 @@ fn slice_bytes(file_bytes: u64, file_begin: &str, file_end: &str, begin: i64, en
 
 fn journal_filter_label(filter: u8) -> &'static str {
     match filter {
-        2 => "Система",
-        0 => "Все записи",
-        _ => "Камеры и тревоги",
+        2 => tr("Система"),
+        0 => tr("Все записи"),
+        _ => tr("Камеры и тревоги"),
     }
 }
 
@@ -7534,40 +7550,40 @@ fn log_is_camera(kind: &str) -> bool {
 fn log_title(kind: &str) -> String {
     let key = kind.to_ascii_lowercase();
     let label = match key.as_str() {
-        "eventstart" => "Начало события",
-        "eventstop" => "Конец события",
-        "videomotion" | "motiondetect" | "motiondetection" => "Движение",
-        "videoloss" | "lossdetect" => "Потеря видео",
-        "videoblind" | "blinddetect" => "Заслонение",
-        "localalarm" | "alarmlocal" | "alarmin" | "localalram" => "Тревожный вход",
-        "netalarm" | "alarmnet" => "Сетевая тревога",
-        "ipcalarm" => "Тревога камеры",
-        "recordstart" | "startrecord" => "Начало записи",
-        "recordstop" | "stoprecord" => "Конец записи",
-        "storagefailure" | "storageerror" | "diskerror" | "diskfull" | "nodisk" => "Диск",
-        "netabort" | "netdisconnect" => "Обрыв сети",
-        "ipdisconnect" | "ipcdisconnect" => "Камера недоступна",
-        "login" | "loginin" => "Вход",
-        "logout" => "Выход",
-        "reboot" => "Перезагрузка",
-        "shutdown" | "shutdow" => "Выключение",
-        "saveconfig" | "setconfig" | "config" => "Изменение настроек",
-        "settime" => "Смена времени",
-        _ if key.contains("motion") => "Движение",
-        _ if key.contains("loss") => "Потеря видео",
-        _ if key.contains("blind") => "Заслонение",
-        _ if key.contains("alarm") => "Тревога",
-        _ if key.contains("record") => "Запись",
-        _ if key.contains("login") => "Вход",
-        _ if key.contains("logout") => "Выход",
-        _ if key.contains("reboot") => "Перезагрузка",
-        _ if key.contains("disk") || key.contains("storage") => "Диск",
-        _ if key.contains("config") => "Настройки",
+        "eventstart" => tr("Начало события"),
+        "eventstop" => tr("Конец события"),
+        "videomotion" | "motiondetect" | "motiondetection" => tr("Движение"),
+        "videoloss" | "lossdetect" => tr("Потеря видео"),
+        "videoblind" | "blinddetect" => tr("Заслонение"),
+        "localalarm" | "alarmlocal" | "alarmin" | "localalram" => tr("Тревожный вход"),
+        "netalarm" | "alarmnet" => tr("Сетевая тревога"),
+        "ipcalarm" => tr("Тревога камеры"),
+        "recordstart" | "startrecord" => tr("Начало записи"),
+        "recordstop" | "stoprecord" => tr("Конец записи"),
+        "storagefailure" | "storageerror" | "diskerror" | "diskfull" | "nodisk" => tr("Диск"),
+        "netabort" | "netdisconnect" => tr("Обрыв сети"),
+        "ipdisconnect" | "ipcdisconnect" => tr("Камера недоступна"),
+        "login" | "loginin" => tr("Вход"),
+        "logout" => tr("Выход"),
+        "reboot" => tr("Перезагрузка"),
+        "shutdown" | "shutdow" => tr("Выключение"),
+        "saveconfig" | "setconfig" | "config" => tr("Изменение настроек"),
+        "settime" => tr("Смена времени"),
+        _ if key.contains("motion") => tr("Движение"),
+        _ if key.contains("loss") => tr("Потеря видео"),
+        _ if key.contains("blind") => tr("Заслонение"),
+        _ if key.contains("alarm") => tr("Тревога"),
+        _ if key.contains("record") => tr("Запись"),
+        _ if key.contains("login") => tr("Вход"),
+        _ if key.contains("logout") => tr("Выход"),
+        _ if key.contains("reboot") => tr("Перезагрузка"),
+        _ if key.contains("disk") || key.contains("storage") => tr("Диск"),
+        _ if key.contains("config") => tr("Настройки"),
         _ => "",
     };
     if label.is_empty() {
         if kind.is_empty() {
-            "Событие".into()
+            tr("Событие").into()
         } else {
             kind.to_string()
         }
@@ -7637,11 +7653,11 @@ fn trailing_channel(data: &str) -> Option<u16> {
 
 fn journal_header(ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        journal_cell(ui, 168.0, "Время", MUTED, false);
-        journal_cell(ui, 150.0, "Устройство", MUTED, false);
-        journal_cell(ui, 180.0, "Событие", MUTED, false);
-        journal_cell(ui, 88.0, "Канал", MUTED, false);
-        ui.label(egui::RichText::new("Подробности").color(MUTED).size(13.0));
+        journal_cell(ui, 168.0, tr("Время"), MUTED, false);
+        journal_cell(ui, 150.0, tr("Устройство"), MUTED, false);
+        journal_cell(ui, 180.0, tr("Событие"), MUTED, false);
+        journal_cell(ui, 88.0, tr("Канал"), MUTED, false);
+        ui.label(egui::RichText::new(tr("Подробности")).color(MUTED).size(13.0));
     });
 }
 
@@ -7698,9 +7714,9 @@ fn format_span(seconds: i64) -> String {
         let minutes = (seconds / 60) % 60;
         let rest = seconds % 60;
         if rest == 0 {
-            format!("{hours}ч {minutes:02}'")
+            trf!("{hours}ч {minutes}'", hours = hours, minutes = format!("{:02}", minutes))
         } else {
-            format!("{hours}ч {minutes:02}'{rest:02}\"")
+            trf!("{hours}ч {minutes}'{rest}\"", hours = hours, minutes = format!("{:02}", minutes), rest = format!("{:02}", rest))
         }
     }
 }
@@ -7742,15 +7758,15 @@ fn paint_download_bar(ui: &mut egui::Ui, fraction: Option<f32>) {
 
 fn format_bytes(bytes: u64) -> String {
     if bytes >= 1024 * 1024 * 1024 {
-        format!("{:.1} ГБ", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+        trf!("{value} ГБ", value = format!("{:.1}", bytes as f64 / (1024.0 * 1024.0 * 1024.0)))
     } else if bytes >= 1024 * 1024 {
-        format!("{:.1} МБ", bytes as f64 / (1024.0 * 1024.0))
+        trf!("{value} МБ", value = format!("{:.1}", bytes as f64 / (1024.0 * 1024.0)))
     } else if bytes >= 1024 {
-        format!("{:.0} КБ", bytes as f64 / 1024.0)
+        trf!("{value} КБ", value = format!("{:.0}", bytes as f64 / 1024.0))
     } else if bytes == 0 {
         "—".into()
     } else {
-        format!("{bytes} Б")
+        trf!("{bytes} Б", bytes = bytes)
     }
 }
 
@@ -7829,7 +7845,7 @@ fn pack_mp4(
         Codec::H264 => "h264",
         Codec::H265 => "hevc",
         Codec::Mpeg4 | Codec::Jpeg => {
-            return Err("этот кодек нельзя упаковать без перекодирования".into());
+            return Err(tr("этот кодек нельзя упаковать без перекодирования").into());
         }
     };
     let rate = fps.max(1).to_string();
@@ -7925,7 +7941,7 @@ fn run_ffmpeg(args: &[String], cancel: &AtomicBool) -> Result<(), String> {
         command.creation_flags(0x0800_0000);
     }
     let mut child = command.spawn().map_err(|err| {
-        format!("не удалось запустить ffmpeg ({}): {err}", ffmpeg_path())
+        trf!("не удалось запустить ffmpeg ({value}): {err}", value = ffmpeg_path(), err = err)
     })?;
     let mut stderr = child.stderr.take();
     let logged = thread::spawn(move || {
@@ -7940,7 +7956,7 @@ fn run_ffmpeg(args: &[String], cancel: &AtomicBool) -> Result<(), String> {
             let _ = child.kill();
             let _ = child.wait();
             let _ = logged.join();
-            return Err("скачивание отменено".into());
+            return Err(tr("скачивание отменено").into());
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -7954,7 +7970,7 @@ fn run_ffmpeg(args: &[String], cancel: &AtomicBool) -> Result<(), String> {
     } else {
         let detail = log.trim().lines().last().unwrap_or("").chars().take(180).collect::<String>();
         if detail.is_empty() {
-            Err("ffmpeg не собрал файл".into())
+            Err(tr("ffmpeg не собрал файл").into())
         } else {
             Err(detail)
         }
@@ -8069,18 +8085,18 @@ fn shift_month(year: &mut i32, month: &mut u32, delta: i32) {
 
 fn month_title(month: u32) -> &'static str {
     [
-        "Январь",
-        "Февраль",
-        "Март",
-        "Апрель",
-        "Май",
-        "Июнь",
-        "Июль",
-        "Август",
-        "Сентябрь",
-        "Октябрь",
-        "Ноябрь",
-        "Декабрь",
+        tr("Январь"),
+        tr("Февраль"),
+        tr("Март"),
+        tr("Апрель"),
+        tr("Май"),
+        tr("Июнь"),
+        tr("Июль"),
+        tr("Август"),
+        tr("Сентябрь"),
+        tr("Октябрь"),
+        tr("Ноябрь"),
+        tr("Декабрь"),
     ]
     .get(month.wrapping_sub(1) as usize)
     .copied()
@@ -8179,14 +8195,14 @@ enum TabHit {
 
 fn page_label(page: Page) -> &'static str {
     match page {
-        Page::Home => "Главная",
-        Page::Live => "Просмотр",
-        Page::Device => "Устройства",
-        Page::Archive => "Архив",
-        Page::Journal => "Журнал",
-        Page::Settings => "Программа",
-        Page::Config => "Конфигуратор",
-        Page::Later(title, _) => title,
+        Page::Home => tr("Главная"),
+        Page::Live => tr("Просмотр"),
+        Page::Device => tr("Устройства"),
+        Page::Archive => tr("Архив"),
+        Page::Journal => tr("Журнал"),
+        Page::Settings => tr("Программа"),
+        Page::Config => tr("Конфигуратор"),
+        Page::Later(title, _) => tr(title),
     }
 }
 
@@ -8327,6 +8343,8 @@ struct Settings {
     aspect: String,
     page: String,
     cells: Vec<Option<Source>>,
+    /// Code of the interface language file; empty means "pick by the system language".
+    language: String,
 }
 
 impl Default for Settings {
@@ -8353,6 +8371,7 @@ impl Default for Settings {
             aspect: "auto".into(),
             page: "home".into(),
             cells: Vec::new(),
+            language: String::new(),
         }
     }
 }
@@ -8542,12 +8561,12 @@ fn link_color(status: &str, placed: bool) -> egui::Color32 {
 
 fn link_hint(status: &str) -> &'static str {
     match status {
-        "Connected" => "Камера на связи",
-        "Offline" => "Нет сигнала",
-        "NoConfig" => "Камера не добавлена",
-        "NoLogin" | "LoginFailed" => "Камера не входит",
-        "" => "Состояние ещё не получено",
-        _ => "Камера не работает",
+        "Connected" => tr("Камера на связи"),
+        "Offline" => tr("Нет сигнала"),
+        "NoConfig" => tr("Камера не добавлена"),
+        "NoLogin" | "LoginFailed" => tr("Камера не входит"),
+        "" => tr("Состояние ещё не получено"),
+        _ => tr("Камера не работает"),
     }
 }
 
@@ -8556,9 +8575,9 @@ fn list_hint(status: &str, placed: bool) -> String {
     if placed {
         health.to_string()
     } else if status.is_empty() || status == "Connected" {
-        "Не выведена в ячейку".into()
+        tr("Не выведена в ячейку").into()
     } else {
-        format!("{health}\nНе выведена в ячейку")
+        trf!("{health}\nНе выведена в ячейку", health = health)
     }
 }
 
@@ -8567,7 +8586,7 @@ fn channel_title(device: Option<&LiveDevice>, channel: u16) -> String {
         .and_then(|item| item.titles.get(channel as usize))
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| format!("Канал {}", channel + 1))
+        .unwrap_or_else(|| trf!("Канал {value}", value = channel + 1))
 }
 
 fn settings_path() -> PathBuf {
@@ -8575,6 +8594,30 @@ fn settings_path() -> PathBuf {
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.join("xm-settings.json")))
         .unwrap_or_else(|| PathBuf::from("xm-settings.json"))
+}
+
+fn language_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("lang")))
+        .unwrap_or_else(|| PathBuf::from("lang"))
+}
+
+/// Writes the language files on first start and switches to `wanted`, or to the system
+/// language when nothing was chosen yet. Returns the code actually in use.
+fn start_language(wanted: &str) -> String {
+    let dir = language_dir();
+    let _ = xm_nvr::i18n::ensure_files(&dir);
+    let code = if wanted.trim().is_empty() {
+        xm_nvr::i18n::system_language().to_string()
+    } else {
+        wanted.trim().to_string()
+    };
+    if xm_nvr::i18n::activate(&dir, &code).is_ok() {
+        return code;
+    }
+    let _ = xm_nvr::i18n::activate(&dir, "ru");
+    "ru".into()
 }
 
 fn page_name(page: Page) -> String {
@@ -8627,8 +8670,8 @@ enum Aspect {
 
 fn aspect_name(aspect: Aspect) -> &'static str {
     match aspect {
-        Aspect::Auto => "Авто",
-        Aspect::Original => "Оригинал",
+        Aspect::Auto => tr("Авто"),
+        Aspect::Original => tr("Оригинал"),
         Aspect::R4x3 => "4:3",
         Aspect::R16x9 => "16:9",
     }
@@ -8804,11 +8847,11 @@ fn device_model(device: &LiveDevice) -> String {
 
 fn device_status_text(device: &LiveDevice) -> String {
     if device.connected {
-        "Онлайн".into()
+        tr("Онлайн").into()
     } else if !device.error.is_empty() {
         device.error.clone()
     } else {
-        "Подключение…".into()
+        tr("Подключение…").into()
     }
 }
 
@@ -8848,25 +8891,25 @@ fn device_detail_rows(ui: &mut egui::Ui, device: &LiveDevice) {
     let live = live_channel_count(device);
     let rows = [
         (
-            "Пользователь",
+            tr("Пользователь"),
             if device.user.trim().is_empty() {
                 "—".into()
             } else {
                 device.user.clone()
             },
         ),
-        ("Серийный номер", blank_dash(&device.serial)),
-        ("Прошивка", blank_dash(&device.software)),
+        (tr("Серийный номер"), blank_dash(&device.serial)),
+        (tr("Прошивка"), blank_dash(&device.software)),
         (
-            "Каналов",
+            tr("Каналов"),
             if device.connected {
                 device.channels.to_string()
             } else {
-                "ещё не получено".into()
+                tr("ещё не получено").into()
             },
         ),
         (
-            "На связи",
+            tr("На связи"),
             if device.connected {
                 live.to_string()
             } else {
@@ -8874,11 +8917,11 @@ fn device_detail_rows(ui: &mut egui::Ui, device: &LiveDevice) {
             },
         ),
         (
-            "Домофон",
+            tr("Домофон"),
             if device.door {
-                "замок доступен".into()
+                tr("замок доступен").into()
             } else {
-                "нет".into()
+                tr("нет").into()
             },
         ),
     ];
@@ -8954,7 +8997,7 @@ fn probe_device(
     device.connected = true;
     device.error.clear();
     drop(list);
-    *status.lock().unwrap() = format!("{name}: {channels} каналов");
+    *status.lock().unwrap() = trf!("{name}: {channels} каналов", name = name, channels = channels);
 }
 
 fn probe_hikvision(
@@ -9001,11 +9044,11 @@ fn probe_hikvision(
     }
     drop(list);
     *status.lock().unwrap() = if door {
-        format!("{name}: домофон, {channels} кан.")
+        trf!("{name}: домофон, {channels} кан.", name = name, channels = channels)
     } else if offline > 0 {
-        format!("{name}: {channels} каналов, не в сети: {offline}")
+        trf!("{name}: {channels} каналов, не в сети: {offline}", name = name, channels = channels, offline = offline)
     } else {
-        format!("{name}: {channels} каналов")
+        trf!("{name}: {channels} каналов", name = name, channels = channels)
     };
 }
 
@@ -9025,7 +9068,7 @@ fn open_hik(host: &str, user: &str, password: &str, source: &HikSource, from: i6
     opened.map_err(|err| {
         let text = err.to_string();
         if text.contains(":554:") {
-            format!("{text}. Для видео нужен открытый порт 554")
+            trf!("{text}. Для видео нужен открытый порт 554", text = text)
         } else {
             text
         }
@@ -9108,7 +9151,7 @@ fn run_hik(
                     }
                     Err(err) => {
                         if slot.still(generation) {
-                            *status.lock().unwrap() = format!("Регистратор не перемотал на это место: {err}");
+                            *status.lock().unwrap() = trf!("Регистратор не перемотал на это место: {err}", err = err);
                         }
                     }
                 }
@@ -9117,7 +9160,7 @@ fn run_hik(
             if want != applied_speed {
                 if rtsp.set_speed(want).is_err() && slot.still(generation) {
                     *status.lock().unwrap() =
-                        format!("Регистратор не принял скорость {}", speed_label(want));
+                        trf!("Регистратор не принял скорость {want}", want = speed_label(want));
                 }
                 applied_speed = want;
             }
@@ -9132,9 +9175,9 @@ fn run_hik(
                         .unwrap()
                         .is_some_and(|time| wall_epoch(time) >= finish - 5);
                     *status.lock().unwrap() = if !live && near_end {
-                        "Запись закончилась".into()
+                        tr("Запись закончилась").into()
                     } else {
-                        "поток Hikvision прервался".into()
+                        tr("поток Hikvision прервался").into()
                     };
                 }
                 break;
@@ -9162,11 +9205,11 @@ fn run_hik(
             warned = true;
             let name = if codec == Codec::H265 { "H.265" } else { "H.264" };
             *status.lock().unwrap() = if fed == 0 {
-                format!("Hikvision: видео {name} идёт ({video_nals} NAL), но ключевого кадра нет")
+                trf!("Hikvision: видео {name} идёт ({video_nals} NAL), но ключевого кадра нет", name = name, video_nals = video_nals)
             } else if hwaccel {
-                format!("Hikvision: видео {name} идёт, картинки нет. Попробуйте выключить аппаратное ускорение")
+                trf!("Hikvision: видео {name} идёт, картинки нет. Попробуйте выключить аппаратное ускорение", name = name)
             } else {
-                format!("Hikvision: видео {name} идёт, картинки нет")
+                trf!("Hikvision: видео {name} идёт, картинки нет", name = name)
             };
         }
         if nal.codec != codec {
@@ -9200,7 +9243,7 @@ fn run_hik(
                 continue;
             }
             if slot.still(generation) {
-                *status.lock().unwrap() = "декодер остановился".into();
+                *status.lock().unwrap() = tr("декодер остановился").into();
             }
             break;
         }
@@ -9266,12 +9309,10 @@ impl HikSound {
         }
         let warning = match self.format.as_ref().map(|format| &format.codec) {
             None => Some(
-                "Звука в этом потоке нет. В настройках камеры или регистратора выберите для потока тип «Видео и аудио»"
+                tr("Звука в этом потоке нет. В настройках камеры или регистратора выберите для потока тип «Видео и аудио»")
                     .to_string(),
             ),
-            Some(xm_nvr::HikAudioCodec::Other(name)) => Some(format!(
-                "Аудиокодек камеры {name} не поддерживается. Выберите в её настройках G.711 или AAC"
-            )),
+            Some(xm_nvr::HikAudioCodec::Other(name)) => Some(trf!("Аудиокодек камеры {name} не поддерживается. Выберите в её настройках G.711 или AAC", name = name)),
             _ => None,
         };
         if let Some(warning) = warning {
@@ -9307,7 +9348,7 @@ impl HikSound {
                         Ok(decoder) => self.aac = Some(decoder),
                         Err(err) => {
                             self.aac_failed = true;
-                            *status.lock().unwrap() = format!("Звук: {err}");
+                            *status.lock().unwrap() = trf!("Звук: {err}", err = err);
                         }
                     }
                 }
@@ -9378,11 +9419,11 @@ impl AacDecoder {
             command.creation_flags(0x0800_0000);
         }
         let mut child = command.spawn().map_err(|err| {
-            format!("не удалось запустить ffmpeg ({}): {err}", ffmpeg_path())
+            trf!("не удалось запустить ffmpeg ({value}): {err}", value = ffmpeg_path(), err = err)
         })?;
         let (Some(mut stdin), Some(mut stdout)) = (child.stdin.take(), child.stdout.take()) else {
             let _ = child.kill();
-            return Err("ffmpeg не открыл каналы для звука".into());
+            return Err(tr("ffmpeg не открыл каналы для звука").into());
         };
         let (feed, frames) = mpsc::sync_channel::<Vec<u8>>(64);
         thread::spawn(move || {
@@ -9583,7 +9624,7 @@ fn run_media(
                             pushed = 0;
                         }
                         Err(err) => {
-                            *status.lock().unwrap() = format!("декодер: {err}");
+                            *status.lock().unwrap() = trf!("декодер: {err}", err = err);
                             return;
                         }
                     }
@@ -9604,21 +9645,21 @@ fn run_media(
                     if hw {
                         hw = false;
                         *status.lock().unwrap() =
-                            "Видеокарта не взяла поток, декодирую на процессоре".into();
+                            tr("Видеокарта не взяла поток, декодирую на процессоре").into();
                         continue;
                     }
                     if !swapped {
                         swapped = true;
                         chosen = Some(alternate(chosen.unwrap_or(Codec::H264)));
                         if announce {
-                            *status.lock().unwrap() = "Пробую другой кодек…".into();
+                            *status.lock().unwrap() = tr("Пробую другой кодек…").into();
                         }
                         continue;
                     }
                     *status.lock().unwrap() = if detail.is_empty() {
-                        "декодер остановился".into()
+                        tr("декодер остановился").into()
                     } else {
-                        format!("декодер: {detail}")
+                        trf!("декодер: {detail}", detail = detail)
                     };
                     break;
                 }
@@ -9657,7 +9698,7 @@ fn run_media(
                     if hw {
                         hw = false;
                         *status.lock().unwrap() =
-                            "Видеокарта не взяла поток, декодирую на процессоре".into();
+                            tr("Видеокарта не взяла поток, декодирую на процессоре").into();
                         pushed = 0;
                         continue;
                     }
@@ -9665,15 +9706,15 @@ fn run_media(
                         swapped = true;
                         chosen = Some(alternate(chosen.unwrap_or(Codec::H264)));
                         if announce {
-                            *status.lock().unwrap() = "Картинки нет, пробую другой кодек…".into();
+                            *status.lock().unwrap() = tr("Картинки нет, пробую другой кодек…").into();
                         }
                         pushed = 0;
                         continue;
                     }
                     *status.lock().unwrap() = if detail.is_empty() {
-                        "поток идёт, картинки нет".into()
+                        tr("поток идёт, картинки нет").into()
                     } else {
-                        format!("поток идёт, картинки нет. {detail}")
+                        trf!("поток идёт, картинки нет. {detail}", detail = detail)
                     };
                     break;
                 }
@@ -9683,12 +9724,9 @@ fn run_media(
                 forgive -= 1;
                 if slot.still(generation) {
                     if sent_locate {
-                        *status.lock().unwrap() = "Регистратор не перемотал на это место".into();
+                        *status.lock().unwrap() = tr("Регистратор не перемотал на это место").into();
                     } else if sent_rate {
-                        *status.lock().unwrap() = format!(
-                            "Регистратор не принял скорость {}",
-                            speed_label(applied_speed)
-                        );
+                        *status.lock().unwrap() = trf!("Регистратор не принял скорость {applied_speed}", applied_speed = speed_label(applied_speed));
                     }
                 }
                 continue;
@@ -9730,7 +9768,7 @@ fn save_jpg(path: &Path, width: usize, height: usize, rgba: &[u8]) -> std::io::R
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "кадр повреждён",
+            tr("кадр повреждён"),
         ));
     }
     let pixels = width * height;
@@ -9817,17 +9855,17 @@ impl Decoder {
             command.creation_flags(0x0800_0000);
         }
         let mut child = command.spawn().map_err(|err| {
-            format!("не удалось запустить ffmpeg ({}): {err}", ffmpeg_path())
+            trf!("не удалось запустить ffmpeg ({value}): {err}", value = ffmpeg_path(), err = err)
         })?;
         let stdin = child.stdin.take();
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| "ffmpeg не отдал вывод".to_string())?;
+            .ok_or_else(|| tr("ffmpeg не отдал вывод").to_string())?;
         let mut stderr = child
             .stderr
             .take()
-            .ok_or_else(|| "ffmpeg не отдал журнал".to_string())?;
+            .ok_or_else(|| tr("ffmpeg не отдал журнал").to_string())?;
         let errors = Arc::new(Mutex::new(String::new()));
         let error_slot = Arc::clone(&errors);
         thread::spawn(move || {
@@ -9858,7 +9896,7 @@ impl Decoder {
         let Some(stdin) = self.stdin.as_mut() else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
-                "декодер закрыт",
+                tr("декодер закрыт"),
             ));
         };
         stdin.write_all(data)?;
@@ -9897,7 +9935,7 @@ fn read_pam_frame(input: &mut impl BufRead) -> std::io::Result<(usize, usize, Ve
         if input.read_line(&mut line)? == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
-                "поток кадров закончился",
+                tr("поток кадров закончился"),
             ));
         }
         if line.starts_with("P7") {
@@ -9912,7 +9950,7 @@ fn read_pam_frame(input: &mut impl BufRead) -> std::io::Result<(usize, usize, Ve
         if input.read_line(&mut line)? == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
-                "заголовок кадра оборвался",
+                tr("заголовок кадра оборвался"),
             ));
         }
         let trimmed = line.trim();
@@ -9930,7 +9968,7 @@ fn read_pam_frame(input: &mut impl BufRead) -> std::io::Result<(usize, usize, Ve
     if width == 0 || height == 0 || width > 4096 || height > 4096 || (depth != 3 && depth != 4) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("кадр {width}x{height} depth {depth}"),
+            trf!("кадр {width}x{height} depth {depth}", width = width, height = height, depth = depth),
         ));
     }
     let mut raw = vec![0u8; width * height * depth];
@@ -10300,11 +10338,11 @@ fn play_audio(rx: mpsc::Receiver<PcmChunk>, status: Arc<Mutex<String>>) {
     let queue = Arc::new(Mutex::new(std::collections::VecDeque::<f32>::new()));
     let opened = cpal::default_host()
         .default_output_device()
-        .ok_or_else(|| "устройство вывода не найдено".to_string())
+        .ok_or_else(|| tr("устройство вывода не найдено").to_string())
         .and_then(|device| {
             let config = device
                 .default_output_config()
-                .map_err(|err| format!("устройство вывода не открылось ({err})"))?;
+                .map_err(|err| trf!("устройство вывода не открылось ({err})", err = err))?;
             let format = config.sample_format();
             let config: cpal::StreamConfig = config.into();
             let rate = config.sample_rate;
@@ -10321,17 +10359,17 @@ fn play_audio(rx: mpsc::Receiver<PcmChunk>, status: Arc<Mutex<String>>) {
                 cpal::SampleFormat::I32 => {
                     open_output::<i32>(&device, &config, queue.clone(), status.clone())
                 }
-                other => Err(format!("формат вывода {other} не поддерживается")),
+                other => Err(trf!("формат вывода {other} не поддерживается", other = other)),
             }?;
             stream
                 .play()
-                .map_err(|err| format!("устройство вывода не запустилось ({err})"))?;
+                .map_err(|err| trf!("устройство вывода не запустилось ({err})", err = err))?;
             Ok((stream, rate))
         });
     let (_stream, out_rate) = match opened {
         Ok(opened) => opened,
         Err(err) => {
-            *status.lock().unwrap() = format!("Звук: {err}");
+            *status.lock().unwrap() = trf!("Звук: {err}", err = err);
             return;
         }
     };
@@ -10385,12 +10423,12 @@ where
             },
             move |err: cpal::Error| {
                 if !matches!(err.kind(), cpal::ErrorKind::Xrun) {
-                    *status.lock().unwrap() = format!("Звук: {err}");
+                    *status.lock().unwrap() = trf!("Звук: {err}", err = err);
                 }
             },
             None,
         )
-        .map_err(|err| format!("устройство вывода не открылось ({err})"))
+        .map_err(|err| trf!("устройство вывода не открылось ({err})", err = err))
 }
 
 #[cfg(windows)]
@@ -10408,7 +10446,7 @@ fn play_audio(rx: mpsc::Receiver<PcmChunk>, status: Arc<Mutex<String>>) {
             match WaveOut::open(chunk.rate) {
                 Ok(opened) => device = Some(opened),
                 Err(err) => {
-                    *status.lock().unwrap() = format!("Звук: {err}");
+                    *status.lock().unwrap() = trf!("Звук: {err}", err = err);
                     failed = true;
                     continue;
                 }
@@ -10512,7 +10550,7 @@ impl WaveOut {
             )
         };
         if code != 0 || handle.is_null() {
-            return Err(format!("устройство вывода не открылось ({code})"));
+            return Err(trf!("устройство вывода не открылось ({code})", code = code));
         }
         Ok(Self {
             handle,

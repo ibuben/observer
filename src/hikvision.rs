@@ -8,6 +8,7 @@ use std::time::Duration;
 use md5::{Digest, Md5};
 
 use crate::error::Error;
+use crate::i18n::tr;
 use crate::frame::Codec;
 
 const HANDSHAKE: Duration = Duration::from_secs(8);
@@ -202,7 +203,7 @@ impl HikStream {
         match Self::connect(host, user, password, url, true, &mut log, &mut audio_tried) {
             Err(err) if audio_tried && !matches!(err, Error::Device { code: 401, .. }) => {
                 // Some NVRs list an audio track they refuse to set up, and then reject PLAY with 455.
-                log.push(format!("со звуком не запустилось ({err}), повтор только с видео"));
+                log.push(trf!("со звуком не запустилось ({err}), повтор только с видео", err = err));
                 let mut ignored = false;
                 let retry = Self::connect(host, user, password, url, false, &mut log, &mut ignored);
                 (retry, log)
@@ -312,14 +313,11 @@ fn negotiate(
         if describe.status == 401 {
             return Err(Error::Device {
                 code: 401,
-                message: "неверный логин или пароль".into(),
+                message: tr("неверный логин или пароль").into(),
             });
         }
         if describe.status != 200 {
-            return Err(Error::Protocol(format!(
-                "RTSP DESCRIBE вернул {}",
-                describe.status
-            )));
+            return Err(Error::Protocol(trf!("RTSP DESCRIBE вернул {status}", status = describe.status)));
         }
         let sdp = String::from_utf8_lossy(&describe.body).to_string();
         let content_base = describe
@@ -351,7 +349,7 @@ fn negotiate(
             &[],
         )?;
         if setup.status != 200 {
-            return Err(Error::Protocol(format!("RTSP SETUP вернул {}", setup.status)));
+            return Err(Error::Protocol(trf!("RTSP SETUP вернул {status}", status = setup.status)));
         }
         session.log.push(format!(
             "  Session: {}  Transport: {}",
@@ -367,7 +365,7 @@ fn negotiate(
             .trim()
             .to_string();
         if session_id.is_empty() {
-            return Err(Error::Protocol("RTSP не выдал сессию".into()));
+            return Err(Error::Protocol(tr("RTSP не выдал сессию").into()));
         }
         let mut audio = None;
         let mut aac = None;
@@ -400,7 +398,7 @@ fn negotiate(
             &[],
         )?;
         if play.status != 200 {
-            return Err(Error::Protocol(format!("RTSP PLAY вернул {}", play.status)));
+            return Err(Error::Protocol(trf!("RTSP PLAY вернул {status}", status = play.status)));
         }
         Ok(Negotiated {
             sdp,
@@ -670,7 +668,7 @@ impl HikStream {
 
 pub fn describe(host: &str, port: u16, user: &str, password: &str) -> Result<HikInfo, Error> {
     let info = http(host, port, user, password, "GET", "/ISAPI/System/deviceInfo", None)?;
-    ensure_ok(&info, "устройство не ответило")?;
+    ensure_ok(&info, tr("устройство не ответило"))?;
     let body = String::from_utf8_lossy(&info.body);
     let model = xml_text(&body, "model").unwrap_or_default();
     let channels = read_channels(host, port, user, password);
@@ -731,7 +729,7 @@ pub fn search(
             "/ISAPI/ContentMgmt/search",
             Some((&body, "application/xml")),
         )?;
-        ensure_ok(&response, "поиск записей не удался")?;
+        ensure_ok(&response, tr("поиск записей не удался"))?;
         let text = String::from_utf8_lossy(&response.body);
         let page = parse_search(&text);
         let count = page.len();
@@ -817,7 +815,7 @@ pub fn download(
         Streamed::Refused { status, headers, body } => (status, headers, body),
     };
     if status != 401 {
-        return Err(isapi_refusal(status, &detail, "регистратор не отдал запись"));
+        return Err(isapi_refusal(status, &detail, tr("регистратор не отдал запись")));
     }
     let authorization = match pick_challenge(&headers) {
         Some(challenge) => {
@@ -825,12 +823,12 @@ pub fn download(
             authorization("GET", path, user, password, &challenge, 1, &cnonce)
         }
         None if offers_basic(&headers) => basic_authorization(user, password),
-        None => return Err(Error::Protocol("устройство не предложило поддерживаемую авторизацию".into())),
+        None => return Err(Error::Protocol(tr("устройство не предложило поддерживаемую авторизацию").into())),
     };
     match http_streamed(host, port, "GET", path, &body, Some(&authorization), &mut sink, &mut progress)? {
         Streamed::Done(written) => Ok(written),
         Streamed::Refused { status, body, .. } => {
-            Err(isapi_refusal(status, &body, "регистратор не отдал запись"))
+            Err(isapi_refusal(status, &body, tr("регистратор не отдал запись")))
         }
     }
 }
@@ -839,7 +837,7 @@ fn isapi_refusal(status: u16, body: &[u8], what: &str) -> Error {
     if status == 401 {
         return Error::Device {
             code: 401,
-            message: "неверный логин или пароль".into(),
+            message: tr("неверный логин или пароль").into(),
         };
     }
     let text = String::from_utf8_lossy(body);
@@ -945,7 +943,7 @@ Content-Type: application/xml\r\nContent-Length: {}\r\n",
             break index;
         }
         if raw.len() > 1024 * 1024 {
-            return Err(Error::Protocol("заголовок слишком большой".into()));
+            return Err(Error::Protocol(tr("заголовок слишком большой").into()));
         }
     };
     let head = String::from_utf8_lossy(&raw[..split]).to_string();
@@ -984,7 +982,7 @@ Content-Type: application/xml\r\nContent-Length: {}\r\n",
     }
     let written = sink.finish().map_err(Error::Io)?;
     if written == 0 {
-        return Err(Error::Protocol("регистратор прислал пустой файл".into()));
+        return Err(Error::Protocol(tr("регистратор прислал пустой файл").into()));
     }
     Ok(Streamed::Done(written))
 }
@@ -1017,7 +1015,7 @@ impl<R: std::io::BufRead> Read for ChunkedReader<R> {
                 return Ok(0);
             }
             let size = u64::from_str_radix(line.trim().split(';').next().unwrap_or("").trim(), 16)
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "размер куска не разобран"))?;
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, tr("размер куска не разобран")))?;
             if size == 0 {
                 self.done = true;
                 return Ok(0);
@@ -1059,18 +1057,18 @@ pub fn call_status(host: &str, port: u16, user: &str, password: &str) -> Result<
     if response.status == 401 {
         return Err(Error::Device {
             code: 401,
-            message: "неверный логин или пароль".into(),
+            message: tr("неверный логин или пароль").into(),
         });
     }
     if response.status != 200 {
         return Err(Error::Device {
             code: response.status as i64,
-            message: format!("состояние вызова не прочитано ({})", response.status),
+            message: trf!("состояние вызова не прочитано ({status})", status = response.status),
         });
     }
     let text = String::from_utf8_lossy(&response.body);
     let word = json_quoted_after_key(&text.to_ascii_lowercase(), "status").ok_or_else(|| {
-        Error::Protocol("домофон не сообщил состояние вызова".into())
+        Error::Protocol(tr("домофон не сообщил состояние вызова").into())
     })?;
     Ok(match word.as_str() {
         "idle" | "hangup" | "hangingup" => DoorCall::Idle,
@@ -1111,17 +1109,17 @@ pub fn open_door(host: &str, port: u16, user: &str, password: &str) -> Result<()
     if response.status == 401 {
         return Err(Error::Device {
             code: 401,
-            message: "неверный логин или пароль".into(),
+            message: tr("неверный логин или пароль").into(),
         });
     }
     let text = String::from_utf8_lossy(&response.body);
     if response.status == 200 && response_ok(&text) {
         return Ok(());
     }
-    let detail = xml_text(&text, "statusString").unwrap_or_else(|| format!("код {}", response.status));
+    let detail = xml_text(&text, "statusString").unwrap_or_else(|| trf!("код {status}", status = response.status));
     Err(Error::Device {
         code: response.status as i64,
-        message: format!("замок не открылся: {detail}"),
+        message: trf!("замок не открылся: {detail}", detail = detail),
     })
 }
 
@@ -1138,7 +1136,7 @@ fn ensure_ok(response: &HttpResponse, what: &str) -> Result<(), Error> {
     if response.status == 401 {
         return Err(Error::Device {
             code: 401,
-            message: "неверный логин или пароль".into(),
+            message: tr("неверный логин или пароль").into(),
         });
     }
     if response.status != 200 {
@@ -1174,7 +1172,7 @@ fn http(
             authorization(method, path, user, password, &challenge, 1, &cnonce)
         }
         None if offers_basic(&first.headers) => basic_authorization(user, password),
-        None => return Err(Error::Protocol("устройство не предложило поддерживаемую авторизацию".into())),
+        None => return Err(Error::Protocol(tr("устройство не предложило поддерживаемую авторизацию").into())),
     };
     http_once(host, port, method, path, body, Some(&authorization))
 }
@@ -1266,7 +1264,7 @@ fn connect_timeout(host: &str, port: u16) -> Result<TcpStream, Error> {
     Err(Error::Connect {
         host: host.to_string(),
         port,
-        source: last.unwrap_or_else(|| std::io::Error::other("адрес не найден")),
+        source: last.unwrap_or_else(|| std::io::Error::other(tr("адрес не найден"))),
     })
 }
 
@@ -1283,7 +1281,7 @@ fn read_http(stream: &mut TcpStream) -> Result<HttpResponse, Error> {
             break index;
         }
         if raw.len() > 1024 * 1024 {
-            return Err(Error::Protocol("заголовок слишком большой".into()));
+            return Err(Error::Protocol(tr("заголовок слишком большой").into()));
         }
     };
     let head = String::from_utf8_lossy(&raw[..split]).to_string();
@@ -1373,7 +1371,7 @@ fn parse_headers(head: &str) -> Result<(u16, Vec<(String, String)>), Error> {
         .split_whitespace()
         .nth(1)
         .and_then(|item| item.parse().ok())
-        .ok_or_else(|| Error::Protocol("статус ответа не разобран".into()))?;
+        .ok_or_else(|| Error::Protocol(tr("статус ответа не разобран").into()))?;
     let mut headers = Vec::new();
     for line in lines {
         if let Some((name, value)) = line.split_once(':') {
@@ -1443,7 +1441,7 @@ impl Rtsp {
         self.challenge = pick_challenge(&response.headers);
         self.basic = self.challenge.is_none() && offers_basic(&response.headers);
         if self.challenge.is_none() && !self.basic {
-            return Err(Error::Protocol("RTSP не предложил поддерживаемую авторизацию".into()));
+            return Err(Error::Protocol(tr("RTSP не предложил поддерживаемую авторизацию").into()));
         }
         self.nc = 0;
         let response = self.send(method, uri, extra, body, true)?;
@@ -1553,7 +1551,7 @@ fn read_interleaved(stream: &mut TcpStream, pipe: &mut BytePipe) -> Result<(u8, 
         let channel = header[0];
         let length = u16::from_be_bytes([header[1], header[2]]) as usize;
         if length > 1_048_576 {
-            return Err(Error::Protocol("слишком большой RTP".into()));
+            return Err(Error::Protocol(tr("слишком большой RTP").into()));
         }
         let payload = pipe.take(stream, length)?;
         if channel == 0 || channel == 2 {
@@ -1570,7 +1568,7 @@ fn discard_rtsp(stream: &mut TcpStream, pipe: &mut BytePipe, first: u8) -> Resul
             return Ok(());
         }
         if seen.len() > 65536 {
-            return Err(Error::Protocol("служебный ответ RTSP слишком большой".into()));
+            return Err(Error::Protocol(tr("служебный ответ RTSP слишком большой").into()));
         }
     }
 }
@@ -2066,7 +2064,7 @@ fn read_channels(host: &str, port: u16, user: &str, password: &str) -> Vec<HikCh
     if channels.is_empty() {
         channels.push(HikChannel {
             id: 1,
-            name: "Камера 1".into(),
+            name: tr("Камера 1").into(),
             online: true,
         });
     }
@@ -2078,7 +2076,7 @@ fn parse_channels(xml: &str, tag: &str) -> Vec<HikChannel> {
         .into_iter()
         .filter_map(|block| {
             let id = xml_text(block, "id")?.parse::<u16>().ok()?;
-            let name = xml_text(block, "name").unwrap_or_else(|| format!("Камера {id}"));
+            let name = xml_text(block, "name").unwrap_or_else(|| trf!("Камера {id}", id = id));
             Some(HikChannel {
                 id,
                 name,
@@ -2111,7 +2109,7 @@ fn parse_streaming(xml: &str) -> Vec<HikChannel> {
         if id == 0 || channels.iter().any(|known| known.id == id) {
             continue;
         }
-        let name = xml_text(block, "channelName").unwrap_or_else(|| format!("Камера {id}"));
+        let name = xml_text(block, "channelName").unwrap_or_else(|| trf!("Камера {id}", id = id));
         channels.push(HikChannel {
             id,
             name,

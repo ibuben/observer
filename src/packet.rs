@@ -5,6 +5,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::error::Error;
+use crate::i18n::tr;
 
 pub const HEADER_LEN: usize = 20;
 
@@ -35,10 +36,7 @@ pub fn encode(session: u32, sequence: u32, msg: u16, payload: &[u8]) -> Vec<u8> 
 
 pub fn decode_header(buf: &[u8]) -> Result<(u8, u32, u32, u16, u32), Error> {
     if buf.len() < HEADER_LEN || buf[0] != 0xFF {
-        return Err(Error::Protocol(format!(
-            "заголовок {HEADER_LEN} байт, получено {}",
-            buf.len()
-        )));
+        return Err(Error::Protocol(trf!("заголовок {HEADER_LEN} байт, получено {buf}", HEADER_LEN = HEADER_LEN, buf = buf.len())));
     }
     let version = buf[1];
     let session = u32::from_le_bytes(buf[4..8].try_into().unwrap());
@@ -53,9 +51,7 @@ pub fn read_packet(stream: &mut TcpStream) -> Result<Packet, Error> {
     stream.read_exact(&mut header).map_err(map_io)?;
     let (version, session, sequence, msg, len) = decode_header(&header)?;
     if len > 16 * 1024 * 1024 {
-        return Err(Error::Protocol(format!(
-            "слишком большой пакет: {len} байт"
-        )));
+        return Err(Error::Protocol(trf!("слишком большой пакет: {len} байт", len = len)));
     }
     let mut payload = vec![0u8; len as usize];
     if len > 0 {
@@ -85,7 +81,7 @@ pub fn write_packet(
 
 pub fn json_payload(value: &Value) -> Result<Vec<u8>, Error> {
     let mut payload = serde_json::to_vec(value)
-        .map_err(|err| Error::Protocol(format!("не удалось собрать JSON: {err}")))?;
+        .map_err(|err| Error::Protocol(trf!("не удалось собрать JSON: {err}", err = err)))?;
     payload.push(b'\n');
     payload.push(0);
     Ok(payload)
@@ -95,13 +91,13 @@ pub fn parse_json_payload(payload: &[u8]) -> Result<Value, Error> {
     let start = payload
         .iter()
         .position(|byte| *byte == b'{')
-        .ok_or_else(|| Error::Protocol("в ответе нет JSON".into()))?;
+        .ok_or_else(|| Error::Protocol(tr("в ответе нет JSON").into()))?;
     let end = payload
         .iter()
         .rposition(|byte| *byte == b'}')
-        .ok_or_else(|| Error::Protocol("JSON обрывается".into()))?;
+        .ok_or_else(|| Error::Protocol(tr("JSON обрывается").into()))?;
     if end < start {
-        return Err(Error::Protocol("JSON обрывается".into()));
+        return Err(Error::Protocol(tr("JSON обрывается").into()));
     }
     let slice = &payload[start..=end];
     match serde_json::from_slice(slice) {
@@ -116,7 +112,7 @@ pub fn parse_json_payload(payload: &[u8]) -> Result<Value, Error> {
                 .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\r' | '\t'))
                 .collect();
             serde_json::from_str(&cleaned)
-                .map_err(|err| Error::Protocol(format!("неразборчивый JSON: {err}")))
+                .map_err(|err| Error::Protocol(trf!("неразборчивый JSON: {err}", err = err)))
         }
     }
 }

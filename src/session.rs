@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::error::{device_message, Error};
+use crate::i18n::tr;
 use crate::frame::{pull_frame, AudioFrame, Codec, Frame, VideoFrame, WallTime};
 use crate::hash::sofia_hash;
 use crate::packet::{self, set_timeouts};
@@ -54,7 +55,7 @@ impl StreamKind {
             "main" | "Main" => Ok(StreamKind::Main),
             "sub" | "extra" | "Extra" => Ok(StreamKind::Extra),
             _ => Err(Error::Protocol(
-                "поток должен быть main или sub".into(),
+                tr("поток должен быть main или sub").into(),
             )),
         }
     }
@@ -156,7 +157,7 @@ impl Session {
             host: host.to_string(),
             port,
             source: last_error.unwrap_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::NotFound, "адрес не найден")
+                std::io::Error::new(std::io::ErrorKind::NotFound, tr("адрес не найден"))
             }),
         })?;
         set_timeouts(&stream, DEFAULT_TIMEOUT)?;
@@ -537,15 +538,15 @@ impl Session {
     pub fn set_channel_title(&mut self, channel: u16, title: &str) -> Result<Vec<String>, Error> {
         let title = title.trim();
         if title.is_empty() {
-            return Err(Error::Protocol("имя канала пустое".into()));
+            return Err(Error::Protocol(tr("имя канала пустое").into()));
         }
         if title.chars().count() > 32 {
-            return Err(Error::Protocol("имя длиннее 32 символов".into()));
+            return Err(Error::Protocol(tr("имя длиннее 32 символов").into()));
         }
         let mut titles = self.channel_titles()?;
         let index = channel as usize;
         if titles.is_empty() || index >= titles.len() {
-            return Err(Error::Protocol("регистратор не отдал имя этого канала".into()));
+            return Err(Error::Protocol(tr("регистратор не отдал имя этого канала").into()));
         }
         titles[index] = title.to_string();
         self.request(CHANNEL_TITLE_SET, "ChannelTitle", json!(titles.clone()))?;
@@ -557,7 +558,7 @@ impl Session {
         reply
             .get(name)
             .cloned()
-            .ok_or_else(|| Error::Protocol(format!("регистратор не вернул {name}")))
+            .ok_or_else(|| Error::Protocol(trf!("регистратор не вернул {name}", name = name)))
     }
 
     pub fn config_set(&mut self, name: &str, value: &Value) -> Result<(), Error> {

@@ -26,6 +26,7 @@ jobs:
           $name = "observer-${{ github.ref_name }}-windows-x64"
           New-Item -ItemType Directory $name | Out-Null
           Copy-Item target/release/xm-view.exe, target/release/xm-nvr.exe, README.md $name
+          Copy-Item lang -Destination $name -Recurse
           Compress-Archive -Path "$name/*" -DestinationPath "$name.zip"
 
       - uses: actions/upload-artifact@v4
@@ -61,6 +62,7 @@ jobs:
           name="observer-${{ github.ref_name }}-linux-x64"
           mkdir "$name"
           cp target/release/xm-view target/release/xm-nvr README.md Observer.png "$name/"
+          cp -r lang "$name/"
           tar czf "$name.tar.gz" "$name"
 
       - uses: actions/upload-artifact@v4

@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use egui_phosphor::regular as ph;
 use serde_json::{json, Value};
+use xm_nvr::{tr, trf};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ConfigSection {
@@ -20,15 +21,15 @@ pub enum ConfigSection {
 impl ConfigSection {
     pub fn title(self) -> &'static str {
         match self {
-            Self::Channels => "Каналы",
-            Self::Detect => "Детекция",
-            Self::Record => "Запись",
-            Self::General => "Общие",
-            Self::Picture => "Картинка",
-            Self::Network => "Сеть",
-            Self::Disk => "Диск",
-            Self::Users => "Пользователи",
-            Self::Maintain => "Обслуживание",
+            Self::Channels => tr("Каналы"),
+            Self::Detect => tr("Детекция"),
+            Self::Record => tr("Запись"),
+            Self::General => tr("Общие"),
+            Self::Picture => tr("Картинка"),
+            Self::Network => tr("Сеть"),
+            Self::Disk => tr("Диск"),
+            Self::Users => tr("Пользователи"),
+            Self::Maintain => tr("Обслуживание"),
         }
     }
 
@@ -174,9 +175,9 @@ pub fn format_space(text: &str) -> String {
         return "—".into();
     };
     if mb >= 10_240 {
-        format!("{:.1} ГБ", mb as f64 / 1024.0)
+        trf!("{value} ГБ", value = format!("{:.1}", mb as f64 / 1024.0))
     } else {
-        format!("{mb} МБ")
+        trf!("{mb} МБ", mb = mb)
     }
 }
 
@@ -212,27 +213,27 @@ pub fn toggle_region_bit(text: &str, column: usize) -> String {
 
 pub fn weekday_short(index: usize) -> &'static str {
     match index {
-        0 => "Вс",
-        1 => "Пн",
-        2 => "Вт",
-        3 => "Ср",
-        4 => "Чт",
-        5 => "Пт",
-        6 => "Сб",
+        0 => tr("Вс"),
+        1 => tr("Пн"),
+        2 => tr("Вт"),
+        3 => tr("Ср"),
+        4 => tr("Чт"),
+        5 => tr("Пт"),
+        6 => tr("Сб"),
         _ => "—",
     }
 }
 
 pub fn weekday_label(index: usize) -> &'static str {
     match index {
-        0 => "Воскресенье",
-        1 => "Понедельник",
-        2 => "Вторник",
-        3 => "Среда",
-        4 => "Четверг",
-        5 => "Пятница",
-        6 => "Суббота",
-        _ => "День",
+        0 => tr("Воскресенье"),
+        1 => tr("Понедельник"),
+        2 => tr("Вторник"),
+        3 => tr("Среда"),
+        4 => tr("Четверг"),
+        5 => tr("Пятница"),
+        6 => tr("Суббота"),
+        _ => tr("День"),
     }
 }
 
